@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@video-quick-editor/shared": "workspace:*",
+    "fontkit": "2.0.4",
     "zod": "4.5.4"
   },
   "devDependencies": {

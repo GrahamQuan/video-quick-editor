@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import electron from "vite-plugin-electron/simple";
@@ -6,6 +7,7 @@ import electron from "vite-plugin-electron/simple";
 export default defineConfig({
   base: "./",
   plugins: [
+    tailwindcss(),
     react({ compiler: { logDiagnostics: true } }),
     electron({
       main: {
@@ -15,7 +17,7 @@ export default defineConfig({
             outDir: resolve(import.meta.dirname, "out/main"),
             emptyOutDir: true,
             rolldownOptions: {
-              external: ["electron"],
+              external: ["electron", "fontkit"],
               output: { format: "es", entryFileNames: "index.js" },
             },
           },

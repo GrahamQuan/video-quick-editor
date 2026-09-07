@@ -13,6 +13,7 @@ export default defineConfig({
     },
     rolldownOptions: {
       external: [
+        "fontkit",
         "@video-quick-editor/shared",
         "zod",
         ...builtinModules,

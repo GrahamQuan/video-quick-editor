@@ -3,10 +3,12 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 if (process.platform === "darwin") {
-  const electronApp = resolve(
-    import.meta.dirname,
-    "../apps/video-quick-editor-desktop/node_modules/electron/dist/Electron.app",
-  );
+  const electronApp = process.argv[2]
+    ? resolve(process.argv[2])
+    : resolve(
+        import.meta.dirname,
+        "../apps/video-quick-editor-desktop/node_modules/electron/dist/Electron.app",
+      );
 
   if (!existsSync(electronApp)) {
     throw new Error("未找到 Electron.app，请先运行 pnpm install");

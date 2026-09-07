@@ -12,19 +12,26 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --type-aware --deny-warnings src tests vite.config.ts playwright.config.ts vitest.config.ts",
     "test": "vitest run --passWithNoTests",
-    "test:e2e": "vite build && electron-builder --mac --dir && playwright test",
+    "test:e2e": "vite build && electron-builder --mac --dir && node ../../scripts/ensure-electron-signature.js \"release/mac-arm64/Video Quick Editor.app\" && playwright test",
     "package": "vite build && electron-builder --mac --dir"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.44",
+    "@streamdown/cjk": "1.0.3",
     "@tanstack/react-router": "1.170.33",
     "@video-quick-editor/media-core": "workspace:*",
     "@video-quick-editor/shared": "workspace:*",
+    "@videojs/react": "10.0.0-beta.32",
+    "ai": "7.0.93",
+    "fontkit": "2.0.4",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "streamdown": "2.6.0",
     "zod": "4.5.4"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
+    "@tailwindcss/vite": "4.3.3",
     "@types/node": "24.10.1",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
@@ -32,6 +39,7 @@
     "electron": "35.7.0",
     "electron-builder": "26.15.3",
     "oxc-transform-react": "0.145.0",
+    "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.2.2",
     "vite-plugin-electron": "1.1.2",
@@ -58,6 +66,7 @@
         }
       ],
       "category": "public.app-category.video"
-    }
+    },
+    "afterPack": "../../scripts/after-pack.cjs"
   }
 }
