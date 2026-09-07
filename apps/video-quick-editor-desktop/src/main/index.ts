@@ -1,19 +1,24 @@
+import { resolveImportPaths } from "./import-paths.js";
+import { findDefaultFont } from "./fonts.js";
+import { EditorService } from "./editor-service.js";
+import { ModelStore } from "./model.js";
+import { AgentRunner } from "./agent.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { mediaResponse } from "./media-response.js";
 import {
   app,
   BrowserWindow,
   dialog,
   ipcMain,
-  net,
   protocol,
   shell,
   type IpcMainInvokeEvent,
 } from "electron";
 import {
+  validateWatermarkFont,
   allocateOutputPath,
   assertOutputNotInput,
   createExecutionPlan,
@@ -27,12 +32,14 @@ import {
   type ResolvedClip,
 } from "@video-quick-editor/media-core";
 import {
+  modelUpdateSchema,
   exportRequestSchema,
   settingsSchema,
   watermarkSchema,
   type ExportJob,
   type ExportPlanView,
   type ExportRequest,
+  type Language,
   type OutputSelection,
   type Settings,
 } from "@video-quick-editor/shared";
@@ -59,12 +66,14 @@ interface PersistedSettings {
   ffmpegPath: string;
   ffprobePath: string;
   defaultFontId: string | null;
+  language: Language;
   fonts: Record<string, string>;
 }
 let persisted: PersistedSettings = {
   ffmpegPath: "",
   ffprobePath: "",
   defaultFontId: null,
+  language: "en",
   fonts: {},
 };
 let toolStatus: Settings["toolStatus"] = {
@@ -85,6 +94,7 @@ async function loadSettings(): Promise<void> {
         ffmpegPath: z.string(),
         ffprobePath: z.string(),
         defaultFontId: z.string().uuid().nullable(),
+        language: z.enum(["en", "zh-CN"]).default("en"),
         fonts: z.record(z.string(), z.string()),
       })
       .parse(JSON.parse(await readFile(settingsPath(), "utf8")) as unknown);
@@ -93,6 +103,19 @@ async function loadSettings(): Promise<void> {
   } catch {
     /* first run or invalid settings */
   }
+  const selectedPath = persisted.defaultFontId
+    ? (fonts.get(persisted.defaultFontId) ?? null)
+    : null;
+  const defaultPath = await findDefaultFont(selectedPath);
+  if (defaultPath !== selectedPath || (!defaultPath && persisted.defaultFontId)) {
+    persisted.defaultFontId = defaultPath ? randomUUID() : null;
+    if (defaultPath && persisted.defaultFontId) fonts.set(persisted.defaultFontId, defaultPath);
+    await saveSettings();
+  }
+  editor.update(editor.snapshot().revision, {
+    ...editor.snapshot().request,
+    watermark: { ...editor.snapshot().request.watermark, fontId: persisted.defaultFontId },
+  });
   persisted.ffmpegPath ||= await discoverTool("ffmpeg");
   persisted.ffprobePath ||= await discoverTool("ffprobe");
 }
@@ -148,7 +171,14 @@ async function checkTools(): Promise<Settings["toolStatus"]> {
 }
 
 function currentSettings(): Settings {
-  return settingsSchema.parse({ ...persisted, toolStatus });
+  return settingsSchema.parse({
+    ...persisted,
+    toolStatus,
+    defaultFontName:
+      persisted.defaultFontId && fonts.get(persisted.defaultFontId)
+        ? basename(fonts.get(persisted.defaultFontId)!)
+        : null,
+  });
 }
 
 function assertSender(event: IpcMainInvokeEvent): void {
@@ -173,15 +203,17 @@ function handle(
 async function importPaths(raw: unknown): Promise<ProbedAsset[]> {
   if (!toolStatus.available) await checkTools();
   if (!toolStatus.available) throw new Error(`FFmpeg 工具不可用：${toolStatus.missing.join("；")}`);
-  const paths = z.array(z.string().min(1)).max(100).parse(raw);
+  const paths = await resolveImportPaths(raw);
   const result: ProbedAsset[] = [];
   for (const path of paths) {
     if (resolve(path) !== path) throw new Error("只接受本地绝对路径");
     const id = randomUUID();
     const asset = await probeAsset(persisted.ffprobePath, path, id);
-    assets.set(id, asset);
-    mediaFiles.set(`asset/${id}`, path);
     result.push(asset);
+  }
+  for (const asset of result) {
+    assets.set(asset.id, asset);
+    mediaFiles.set(`asset/${asset.id}`, asset.path);
   }
   return result;
 }
@@ -231,12 +263,34 @@ async function resolveExport(request: ExportRequest): Promise<{
     output = {
       path: await allocateOutputPath(
         app.getPath("downloads"),
-        defaultOutputName(clips[0]!.asset.fileName, clips.length),
+        defaultOutputName(clips[0]!.asset.fileName, clips.length, request.outputProfile),
       ),
       replaceAuthorized: false,
     };
   }
-  const expectedExtension = `.${clips[0]!.asset.container}`;
+  if (!toolStatus.available) throw new Error("FFmpeg 工具不可用");
+  for (const clip of request.clips) {
+    const watermark = clip.watermark ?? request.watermark;
+    if (!watermark.enabled) continue;
+    watermarkSchema.parse(watermark);
+    const selectedFont = watermark.fontId ? fonts.get(watermark.fontId) : null;
+    if (!selectedFont) throw new Error("启用水印时必须选择可读字体");
+    await access(selectedFont, constants.R_OK);
+    const first = clips[0]!.asset.video;
+    validateWatermarkFont(
+      watermark,
+      selectedFont,
+      request.mode === "normalize"
+        ? (request.normalize.width ?? first.displayWidth)
+        : first.displayWidth,
+      request.mode === "normalize"
+        ? (request.normalize.height ?? first.displayHeight)
+        : first.displayHeight,
+    );
+  }
+  await access(dirname(output.path), constants.W_OK);
+  const expectedExtension =
+    request.outputProfile === "mp4-compatible" ? ".mp4" : `.${clips[0]!.asset.container}`;
   if (extname(output.path).toLowerCase() !== expectedExtension)
     throw new Error(`输出容器继承首段，文件扩展名必须为 ${expectedExtension}`);
   await assertOutputNotInput(
@@ -259,17 +313,34 @@ async function makePlan(
   const tempOutputPath = join(tempDirectory, `output${extname(resolvedExport.output.path)}`);
   const textFilePath = request.watermark.enabled ? join(tempDirectory, "watermark.txt") : null;
   if (realRun && textFilePath) await writeFile(textFilePath, request.watermark.text, "utf8");
-  const plan = createExecutionPlan({
-    ffmpegPath: persisted.ffmpegPath,
-    clips: resolvedExport.clips,
-    request,
-    fontPath: resolvedExport.fontPath,
-    textFilePath,
-    tempDirectory,
-    tempOutputPath,
-    finalOutputPath: resolvedExport.output.path,
-  });
-  return { plan, tempDirectory };
+  const watermarkResources = await Promise.all(
+    request.clips.map(async (clip, index) => {
+      const watermark = clip.watermark ?? request.watermark;
+      const path = watermark.enabled ? join(tempDirectory, `watermark-${index}.txt`) : null;
+      if (realRun && path) await writeFile(path, watermark.text, "utf8");
+      return {
+        fontPath: watermark.fontId ? (fonts.get(watermark.fontId) ?? null) : null,
+        textFilePath: path,
+      };
+    }),
+  );
+  try {
+    const plan = createExecutionPlan({
+      watermarkResources,
+      ffmpegPath: persisted.ffmpegPath,
+      clips: resolvedExport.clips,
+      request,
+      fontPath: resolvedExport.fontPath,
+      textFilePath,
+      tempDirectory,
+      tempOutputPath,
+      finalOutputPath: resolvedExport.output.path,
+    });
+    return { plan, tempDirectory };
+  } catch (error) {
+    if (realRun) await rm(tempDirectory, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function emitJobs(): void {
@@ -318,6 +389,7 @@ function escapeFilterPath(path: string): string {
 }
 
 async function previewFrame(raw: unknown): Promise<string> {
+  const draft = editor.snapshot().request;
   const input = z
     .object({
       assetId: z.string().uuid(),
@@ -332,9 +404,28 @@ async function previewFrame(raw: unknown): Promise<string> {
   const id = randomUUID();
   const path = join(directory, `${id}.png`);
   const args = ["-nostdin", "-y", "-ss", secondsArg(input.atUs), "-i", asset.path];
+
+  const first = draft.clips[0] ? assets.get(draft.clips[0].assetId) : asset;
+  const outputWidth =
+    draft.mode === "normalize"
+      ? (draft.normalize.width ?? first?.video.displayWidth ?? asset.video.displayWidth)
+      : asset.video.displayWidth;
+  const outputHeight =
+    draft.mode === "normalize"
+      ? (draft.normalize.height ?? first?.video.displayHeight ?? asset.video.displayHeight)
+      : asset.video.displayHeight;
+  const width = outputWidth + (outputWidth % 2),
+    height = outputHeight + (outputHeight % 2);
+  const baseFilter =
+    draft.mode === "normalize"
+      ? `scale=trunc(iw*sar+0.5):ih,setsar=1,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1`
+      : draft.outputProfile === "mp4-compatible"
+        ? "scale=trunc(iw*sar+0.5):ih,setsar=1,pad=ceil(iw/2)*2:ceil(ih/2)*2"
+        : "null";
   if (input.watermark.enabled) {
     const fontPath = input.watermark.fontId ? fonts.get(input.watermark.fontId) : null;
     if (!fontPath) throw new Error("水印字体已失效");
+    validateWatermarkFont(input.watermark, fontPath, width, height);
     const textPath = join(directory, `${id}.txt`);
     await writeFile(textPath, input.watermark.text, "utf8");
     const coordinates = {
@@ -346,16 +437,145 @@ async function previewFrame(raw: unknown): Promise<string> {
     const [x, y] = coordinates[input.watermark.position];
     args.push(
       "-vf",
-      `drawtext=fontfile='${escapeFilterPath(fontPath)}':textfile='${escapeFilterPath(textPath)}':expansion=none:fontsize=${input.watermark.fontSize}:fontcolor=white:borderw=${Math.max(2, Math.round(input.watermark.fontSize / 16))}:bordercolor=black:x=${x}:y=${y}`,
+      `${baseFilter},drawtext=fontfile='${escapeFilterPath(fontPath)}':textfile='${escapeFilterPath(textPath)}':expansion=none:fontsize=${input.watermark.fontSize}:fontcolor=white:borderw=${input.watermark.borderWidth}:bordercolor=black:x=${x}:y=${y}`,
     );
   }
+  if (!input.watermark.enabled) args.push("-vf", baseFilter);
   args.push("-frames:v", "1", path);
   await runProcess(persisted.ffmpegPath, args);
   mediaFiles.set(`frame/${id}`, path);
   return `media://frame/${id}`;
 }
 
+let exportQueue: Promise<void> = Promise.resolve();
+async function startExport(raw: unknown): Promise<ExportJob> {
+  const request = exportRequestSchema.parse(raw);
+  if (
+    request.output &&
+    jobs.some(
+      (job) =>
+        job.request.output?.token === request.output!.token &&
+        job.state !== "cancelled" &&
+        job.state !== "failed",
+    )
+  )
+    throw new Error(
+      "OUTPUT_CONFLICT: 输出选择已用于另一任务，请选择不同文件名 / Output already assigned; choose another filename",
+    );
+  const taskName = request.clips.length > 1 ? "组合" : "裁剪";
+  const now = new Date().toISOString();
+  const job: ExportJob = {
+    id: randomUUID(),
+    request: structuredClone(request),
+    state: "validating",
+    progress: 0,
+    phase: `校验${taskName}任务`,
+    resultPath: null,
+    error: null,
+    diagnostics: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  jobs.unshift(job);
+  emitJobs();
+  const controller = new AbortController();
+  controllers.set(job.id, controller);
+  const run = async () => {
+    try {
+      controller.signal.throwIfAborted();
+      const { plan, tempDirectory } = await makePlan(request, true);
+      updateJob(job, { state: "preparing", phase: `准备${taskName}临时资源`, progress: 0 });
+      const selection = request.output ? outputSelections.get(request.output.token) : null;
+      await executePlan({
+        ffmpegPath: persisted.ffmpegPath,
+        ffprobePath: persisted.ffprobePath,
+        plan,
+        tempDirectory,
+        replaceAuthorized: selection?.replaceAuthorized ?? false,
+        signal: controller.signal,
+        onPhase(phase, progress) {
+          updateJob(job, {
+            state: phase.includes("验证") || phase.includes("发布") ? "verifying" : "running",
+            phase,
+            progress,
+          });
+        },
+      });
+      updateJob(job, {
+        state: "completed",
+        phase: `${taskName}完成`,
+        progress: 1,
+        resultPath: plan.finalOutputPath,
+      });
+    } catch (error) {
+      updateJob(
+        job,
+        controller.signal.aborted
+          ? { state: "cancelled", phase: `${taskName}已中断`, error: null }
+          : {
+              state: "failed",
+              phase: `${taskName}失败`,
+              error: message(error),
+              diagnostics: [message(error)].slice(-20),
+            },
+      );
+    } finally {
+      controllers.delete(job.id);
+    }
+  };
+  exportQueue = exportQueue.then(run, run);
+  return structuredClone(job);
+}
+function cancelExport(id: string): void {
+  const job = jobs.find((item) => item.id === id);
+  if (!job) throw new Error("Unknown job");
+  const controller = controllers.get(id);
+  if (!controller) return;
+  updateJob(job, { state: "cancelling", phase: "正在中断并清理半成品" });
+  controller.abort();
+}
+let models: ModelStore;
+let agent: AgentRunner;
+const editor = new EditorService({
+  assets: () => sanitizeAssets([...assets.values()]),
+  fontAvailable: (id) => !!id && fonts.has(id),
+  output: (token) => {
+    const item = outputSelections.get(token);
+    return item
+      ? { token, displayPath: item.path, replaceAuthorized: item.replaceAuthorized }
+      : null;
+  },
+  plan: async (request) => (await makePlan(request, false)).plan,
+  start: startExport,
+  jobs: () => structuredClone(jobs),
+  cancel: cancelExport,
+  preview: previewFrame,
+  emit: (draft) => mainWindow?.webContents.send("editor:draft", draft),
+});
+
 function installIpc(): void {
+  handle("editor:get", () => editor.snapshot());
+  handle("editor:update", (_event, raw) => {
+    const i = z
+      .object({
+        expectedRevision: z.number().int().nonnegative(),
+        request: z.unknown(),
+        selectedClipId: z.string().uuid().nullable(),
+      })
+      .parse(raw);
+    return editor.update(i.expectedRevision, i.request, i.selectedClipId);
+  });
+  handle("model:get", () => models.view());
+  handle("model:save", async (_event, raw) => await models.save(modelUpdateSchema.parse(raw)));
+  handle("model:test", async (_event, raw) => await models.test(modelUpdateSchema.parse(raw)));
+  handle("agent:get", () => agent.snapshot());
+  handle(
+    "agent:send",
+    async (_event, raw, displayText) =>
+      await agent.send(z.string().parse(raw), z.string().max(8000).optional().parse(displayText)),
+  );
+  handle("agent:stop", () => agent.stop());
+  handle("agent:clear", async () => await agent.clear());
   handle("assets:choose", async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ["openFile", "multiSelections"],
@@ -411,12 +631,18 @@ function installIpc(): void {
   handle("settings:get", () => currentSettings());
   handle("settings:update", async (_event, raw) => {
     const update = z
-      .object({ ffmpegPath: z.string().optional(), ffprobePath: z.string().optional() })
+      .object({
+        ffmpegPath: z.string().optional(),
+        ffprobePath: z.string().optional(),
+        language: z.enum(["en", "zh-CN"]).optional(),
+      })
       .parse(raw);
+    const toolPathChanged = update.ffmpegPath !== undefined || update.ffprobePath !== undefined;
     if (update.ffmpegPath !== undefined) persisted.ffmpegPath = update.ffmpegPath;
     if (update.ffprobePath !== undefined) persisted.ffprobePath = update.ffprobePath;
+    if (update.language !== undefined) persisted.language = update.language;
     await saveSettings();
-    await checkTools();
+    if (toolPathChanged) await checkTools();
     return currentSettings();
   });
   handle("settings:check-tools", async () => await checkTools());
@@ -435,80 +661,8 @@ function installIpc(): void {
     };
     return view;
   });
-  handle("export:start", async (_event, raw) => {
-    if (jobs.some((job) => !["completed", "failed", "cancelled"].includes(job.state)))
-      throw new Error("一次只能运行一个导出任务");
-    const request = exportRequestSchema.parse(raw);
-    const taskName = request.clips.length > 1 ? "组合" : "裁剪";
-    const now = new Date().toISOString();
-    const job: ExportJob = {
-      id: randomUUID(),
-      request: structuredClone(request),
-      state: "validating",
-      progress: 0,
-      phase: `校验${taskName}任务`,
-      resultPath: null,
-      error: null,
-      diagnostics: [],
-      createdAt: now,
-      updatedAt: now,
-    };
-    jobs.unshift(job);
-    emitJobs();
-    const controller = new AbortController();
-    controllers.set(job.id, controller);
-    void (async () => {
-      try {
-        const { plan, tempDirectory } = await makePlan(request, true);
-        updateJob(job, { state: "preparing", phase: `准备${taskName}临时资源`, progress: 0 });
-        const selection = request.output ? outputSelections.get(request.output.token) : null;
-        await executePlan({
-          ffmpegPath: persisted.ffmpegPath,
-          ffprobePath: persisted.ffprobePath,
-          plan,
-          tempDirectory,
-          replaceAuthorized: selection?.replaceAuthorized ?? false,
-          signal: controller.signal,
-          onPhase(phase, progress) {
-            updateJob(job, {
-              state: phase.includes("验证") || phase.includes("发布") ? "verifying" : "running",
-              phase,
-              progress,
-            });
-          },
-        });
-        updateJob(job, {
-          state: "completed",
-          phase: `${taskName}完成`,
-          progress: 1,
-          resultPath: plan.finalOutputPath,
-        });
-      } catch (error) {
-        updateJob(
-          job,
-          controller.signal.aborted
-            ? { state: "cancelled", phase: `${taskName}已中断`, error: null }
-            : {
-                state: "failed",
-                phase: `${taskName}失败`,
-                error: message(error),
-                diagnostics: [message(error)].slice(-20),
-              },
-        );
-      } finally {
-        controllers.delete(job.id);
-      }
-    })();
-    return structuredClone(job);
-  });
-  handle("export:cancel", (_event, raw) => {
-    const id = z.string().uuid().parse(raw);
-    const job = jobs.find((item) => item.id === id);
-    const controller = controllers.get(id);
-    if (!job || !controller) throw new Error("任务不存在或已经结束");
-    updateJob(job, { state: "cancelling", phase: "正在中断并清理半成品" });
-    controller.abort();
-  });
+  handle("export:start", async (_event, raw) => await startExport(raw));
+  handle("export:cancel", (_event, raw) => cancelExport(z.string().uuid().parse(raw)));
   handle("export:delete-jobs", (_event, raw) => {
     const ids = new Set(z.array(z.string().uuid()).min(1).max(100).parse(raw));
     const selected = jobs.filter((job) => ids.has(job.id));
@@ -545,7 +699,7 @@ async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 1100,
+    minWidth: 800,
     minHeight: 700,
     backgroundColor: "#0d1117",
     webPreferences: {
@@ -584,12 +738,17 @@ async function createWindow(): Promise<void> {
 
 void app.whenReady().then(async () => {
   await loadSettings();
+  models = new ModelStore(app.getPath("userData"));
+  await models.load();
+  agent = new AgentRunner(editor, models, (session) =>
+    mainWindow?.webContents.send("agent:session", session),
+  );
   await checkTools();
   protocol.handle("media", async (request) => {
     const url = new URL(request.url);
     const path = mediaFiles.get(`${url.hostname}${url.pathname}`);
     if (!path) return new Response("Not found", { status: 404 });
-    return await net.fetch(pathToFileURL(path).toString(), { headers: request.headers });
+    return await mediaResponse(request, path);
   });
   installIpc();
   await createWindow();

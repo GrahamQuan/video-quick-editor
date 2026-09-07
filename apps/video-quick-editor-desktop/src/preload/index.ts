@@ -1,8 +1,25 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { ExportRequest, VideoQuickEditorApi, WatermarkSpec } from "@video-quick-editor/shared";
 
+function subscribe<T>(channel: string, listener: (value: T) => void): () => void {
+  const wrapped = (_event: Electron.IpcRendererEvent, value: T) => listener(value);
+  ipcRenderer.on(channel, wrapped);
+  return () => ipcRenderer.removeListener(channel, wrapped);
+}
 const api: VideoQuickEditorApi = {
+  getDraft: async () => await ipcRenderer.invoke("editor:get"),
+  updateDraft: async (input) => await ipcRenderer.invoke("editor:update", input),
+  subscribeDraft: (listener) => subscribe("editor:draft", listener),
+  getModel: async () => await ipcRenderer.invoke("model:get"),
+  saveModel: async (input) => await ipcRenderer.invoke("model:save", input),
+  testModel: async (input) => await ipcRenderer.invoke("model:test", input),
+  getAgentSession: async () => await ipcRenderer.invoke("agent:get"),
+  sendAgent: async (text, displayText) => await ipcRenderer.invoke("agent:send", text, displayText),
+  stopAgent: async () => await ipcRenderer.invoke("agent:stop"),
+  clearAgent: async () => await ipcRenderer.invoke("agent:clear"),
+  subscribeAgent: (listener) => subscribe("agent:session", listener),
   chooseAssets: async () => await ipcRenderer.invoke("assets:choose"),
+  importLocalPaths: async (paths) => await ipcRenderer.invoke("assets:import-paths", paths),
   importDroppedFiles: async (files: File[]) =>
     await ipcRenderer.invoke(
       "assets:import-paths",
