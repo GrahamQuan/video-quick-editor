@@ -1,0 +1,4 @@
+interface:
+  display_name: "项目 Agent 文件设计"
+  short_description: "创建或优化项目 AGENTS.md、Skills 和相关指引，精简上下文并明确完成标准"
+  default_prompt: "使用 $project-agent-files 创建或优化这个项目的 AGENTS.md、Skills 及相关 coding agent 文件。"
