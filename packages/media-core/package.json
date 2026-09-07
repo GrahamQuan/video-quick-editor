@@ -1,0 +1,30 @@
+{
+  "name": "@video-quick-editor/media-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --type-aware --deny-warnings src tests",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@video-quick-editor/shared": "workspace:*",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "5.0.0"
+  }
+}

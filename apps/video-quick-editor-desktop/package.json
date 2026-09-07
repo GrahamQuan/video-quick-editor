@@ -1,0 +1,63 @@
+{
+  "name": "@video-quick-editor/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "macOS 本地视频剪辑、组合与文字水印工具",
+  "author": "Video Quick Editor Contributors",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --type-aware --deny-warnings src tests vite.config.ts playwright.config.ts vitest.config.ts",
+    "test": "vitest run --passWithNoTests",
+    "test:e2e": "vite build && electron-builder --mac --dir && playwright test",
+    "package": "vite build && electron-builder --mac --dir"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "1.170.33",
+    "@video-quick-editor/media-core": "workspace:*",
+    "@video-quick-editor/shared": "workspace:*",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.1.1",
+    "electron": "35.7.0",
+    "electron-builder": "26.15.3",
+    "oxc-transform-react": "0.145.0",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vite-plugin-electron": "1.1.2",
+    "vitest": "5.0.0"
+  },
+  "build": {
+    "appId": "com.grahamquan.videoquickeditor",
+    "productName": "Video Quick Editor",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "electronDist": "node_modules/electron/dist",
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.video"
+    }
+  }
+}
