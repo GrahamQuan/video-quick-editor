@@ -114,6 +114,7 @@ describe("真实 FFmpeg media integration", () => {
         fontId: null,
         position: "bottom-right",
         fontSize: 32,
+        borderWidth: 1,
         margin: 24,
       },
       output: null,

@@ -1,11 +1,14 @@
+import { timestampOutputName } from "@video-quick-editor/shared";
 import { constants } from "node:fs";
 import { access, lstat, realpath } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 
-export function defaultOutputName(firstFileName: string, clipCount: number): string {
-  const extension = extname(firstFileName);
-  const stem = basename(firstFileName, extension);
-  return `${stem}${clipCount === 1 ? "_clip" : "_combined"}${extension}`;
+export function defaultOutputName(
+  firstFileName: string,
+  _clipCount: number,
+  outputProfile: string = "source",
+): string {
+  return timestampOutputName(firstFileName, outputProfile);
 }
 
 export async function allocateOutputPath(

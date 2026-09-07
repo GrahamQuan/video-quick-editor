@@ -15,6 +15,7 @@ const streamSchema = z
     height: z.number().optional(),
     pix_fmt: z.string().optional(),
     time_base: z.string().optional(),
+    sample_aspect_ratio: z.string().optional(),
     avg_frame_rate: z.string().optional(),
     r_frame_rate: z.string().optional(),
     sample_rate: z.string().optional(),
@@ -91,13 +92,16 @@ export async function probeAsset(
   const rFrameRate = parseRational(selectedVideo.r_frame_rate ?? "");
   const rotation =
     selectedVideo.side_data_list?.find((entry) => entry.rotation !== undefined)?.rotation ?? 0;
+  const sarParts = (selectedVideo.sample_aspect_ratio ?? "1:1").split(":").map(Number);
+  const sar = sarParts[0] && sarParts[1] ? sarParts[0] / sarParts[1] : 1;
+  const displayWidth = Math.round(selectedVideo.width * sar);
   const video: VideoInfo = {
     codec: selectedVideo.codec_name,
     profile: selectedVideo.profile ?? null,
     width: selectedVideo.width,
     height: selectedVideo.height,
-    displayWidth: Math.abs(rotation) % 180 === 90 ? selectedVideo.height : selectedVideo.width,
-    displayHeight: Math.abs(rotation) % 180 === 90 ? selectedVideo.width : selectedVideo.height,
+    displayWidth: Math.abs(rotation) % 180 === 90 ? selectedVideo.height : displayWidth,
+    displayHeight: Math.abs(rotation) % 180 === 90 ? displayWidth : selectedVideo.height,
     pixelFormat: selectedVideo.pix_fmt,
     timeBase: selectedVideo.time_base,
     frameRate,
@@ -152,12 +156,17 @@ function inferBitDepth(pixelFormat: string): number | null {
   return match ? Number(match[1]) : 8;
 }
 
-export async function verifyOutput(ffprobePath: string, path: string): Promise<void> {
+export async function verifyOutput(
+  ffprobePath: string,
+  path: string,
+  profile?: string,
+  hasAudio?: boolean,
+): Promise<void> {
   const result = await runProcess(ffprobePath, [
     "-v",
     "error",
     "-show_entries",
-    "format=duration:stream=codec_type,width,height",
+    "format=duration,format_name:stream=codec_type,codec_name,pix_fmt,sample_rate,channels,width,height",
     "-of",
     "json",
     path,
@@ -165,10 +174,23 @@ export async function verifyOutput(ffprobePath: string, path: string): Promise<v
   const parsed = z
     .object({
       streams: z.array(z.object({ codec_type: z.string() }).passthrough()),
-      format: z.object({ duration: z.string().optional() }),
+      format: z.object({ duration: z.string().optional(), format_name: z.string().optional() }),
     })
     .parse(JSON.parse(result.stdout) as unknown);
   if (!parsed.streams.some((stream) => stream.codec_type === "video"))
     throw new Error("导出验证失败：没有视频流");
+  if (profile === "mp4-compatible") {
+    const video = parsed.streams.find((s) => s.codec_type === "video");
+    const audio = parsed.streams.find((s) => s.codec_type === "audio");
+    if (
+      !parsed.format.format_name?.includes("mp4") ||
+      video?.codec_name !== "h264" ||
+      video.pix_fmt !== "yuv420p" ||
+      Boolean(audio) !== Boolean(hasAudio) ||
+      (audio &&
+        (audio.codec_name !== "aac" || audio.sample_rate !== "48000" || audio.channels !== 2))
+    )
+      throw new Error("Output does not match mp4-compatible profile");
+  }
   if (!(Number(parsed.format.duration) > 0)) throw new Error("导出验证失败：时长无效");
 }

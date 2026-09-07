@@ -46,6 +46,7 @@ const request: ExportRequest = {
     fontId: "00000000-0000-4000-8000-000000000003",
     position: "bottom-right",
     fontSize: 32,
+    borderWidth: 1,
     margin: 24,
   },
   output: null,
@@ -54,11 +55,11 @@ const request: ExportRequest = {
 };
 
 describe("执行计划", () => {
-  it("准确剪辑使用 trim、textfile 与 argv，不生成 shell command", () => {
+  it.each([0, 1, 4])("准确剪辑使用自定义描边 %i、textfile 与 argv", (borderWidth) => {
     const plan = createExecutionPlan({
       ffmpegPath: "/ffmpeg",
       clips: [{ asset, startUs: 250_000, endUs: 2_000_000 }],
-      request,
+      request: { ...request, watermark: { ...request.watermark, borderWidth } },
       fontPath: "/字体/字'体.ttf",
       textFilePath: "/tmp/watermark.txt",
       tempDirectory: "/tmp/task",
@@ -71,7 +72,7 @@ describe("执行计划", () => {
     expect(plan.commands[0]?.args.join(" ")).toContain("trim=start=0.250000:end=2.000000");
     expect(plan.commands[0]?.args.join(" ")).toContain("textfile=");
     expect(plan.commands[0]?.args.join(" ")).toContain(
-      "fontcolor=white:borderw=2:bordercolor=black",
+      `fontcolor=white:borderw=${borderWidth}:bordercolor=black`,
     );
     expect(plan.commands[0]?.args.join(" ")).not.toContain("box=1");
     expect(plan.commands[0]?.args).toContain("/tmp/素材 a.mp4");

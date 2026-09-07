@@ -1,5 +1,5 @@
 import { link, mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { ExecutionPlan } from "./planner.js";
 import { runProcess } from "./process.js";
 import { verifyOutput } from "./probe.js";
@@ -25,7 +25,7 @@ export async function executePlan(options: {
       const segmentPaths = plan.commands.slice(0, -1).map((command) => command.args.at(-1)!);
       const manifest = [
         "ffconcat version 1.0",
-        ...segmentPaths.map((path) => `file '${path.replaceAll("'", "'\\''")}'`),
+        ...segmentPaths.map((path) => `file '${basename(path).replaceAll("'", "'\\''")}'`),
       ].join("\n");
       await writeFile(join(tempDirectory, "segments.ffconcat"), manifest, "utf8");
     }
@@ -57,7 +57,8 @@ export async function executePlan(options: {
       onPhase(command.label, (completedWorkUs / totalWorkUs) * 0.97);
     }
     onPhase("验证输出媒体", 0.98);
-    await verifyOutput(options.ffprobePath, plan.tempOutputPath);
+    await verifyOutput(options.ffprobePath, plan.tempOutputPath, plan.outputProfile, plan.hasAudio);
+    signal.throwIfAborted();
     onPhase("发布文件", 0.99);
     if (options.replaceAuthorized) {
       await rename(plan.tempOutputPath, plan.finalOutputPath);

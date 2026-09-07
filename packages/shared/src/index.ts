@@ -3,6 +3,7 @@ import { z } from "zod";
 const safeUs = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const positionSchema = z.enum(["top-left", "top-right", "bottom-left", "bottom-right"]);
 export const exportModeSchema = z.enum(["accurate", "normalize", "copy"]);
+export const languageSchema = z.enum(["en", "zh-CN"]);
 export const jobStateSchema = z.enum([
   "validating",
   "preparing",
@@ -50,14 +51,6 @@ export const assetViewSchema = z.object({
   audio: audioInfoSchema.nullable(),
   warnings: z.array(z.string()),
 });
-export const clipSchema = z
-  .object({
-    id: z.string().uuid(),
-    assetId: z.string().uuid(),
-    startUs: safeUs,
-    endUs: safeUs.positive(),
-  })
-  .refine((clip) => clip.startUs < clip.endUs, { message: "片段起点必须早于终点" });
 export const watermarkSchema = z
   .object({
     enabled: z.boolean(),
@@ -65,6 +58,7 @@ export const watermarkSchema = z
     fontId: z.string().uuid().nullable(),
     position: positionSchema,
     fontSize: z.number().int().min(8).max(512),
+    borderWidth: z.number().int().min(0).max(20).default(1),
     margin: z.number().int().min(0).max(4096),
   })
   .superRefine((watermark, context) => {
@@ -76,13 +70,34 @@ export const watermarkSchema = z
     if (!watermark.fontId)
       context.addIssue({ code: "custom", message: "启用水印时必须选择字体", path: ["fontId"] });
   });
+export const clipSchema = z
+  .object({
+    id: z.string().uuid(),
+    assetId: z.string().uuid(),
+    startUs: safeUs,
+    endUs: safeUs.positive(),
+    watermark: z.object(watermarkSchema.shape).optional(),
+  })
+  .refine((clip) => clip.startUs < clip.endUs, { message: "片段起点必须早于终点" });
 export const outputSelectionSchema = z.object({
   token: z.string().uuid(),
   displayPath: z.string(),
   replaceAuthorized: z.boolean(),
 });
 export const exportRequestSchema = z.object({
-  clips: z.array(clipSchema).min(1),
+  outputProfile: z.enum(["mp4-compatible", "source"]).default("source"),
+  clips: z
+    .array(clipSchema)
+    .min(1)
+    .superRefine((clips, ctx) => {
+      clips.forEach((clip, index) => {
+        if (!clip.watermark) return;
+        const result = watermarkSchema.safeParse(clip.watermark);
+        if (!result.success)
+          for (const issue of result.error.issues)
+            ctx.addIssue({ ...issue, path: [index, "watermark", ...issue.path] });
+      });
+    }),
   mode: exportModeSchema,
   modeWasManuallySelected: z.boolean(),
   watermark: watermarkSchema,
@@ -98,6 +113,8 @@ export const settingsSchema = z.object({
   ffmpegPath: z.string(),
   ffprobePath: z.string(),
   defaultFontId: z.string().uuid().nullable(),
+  defaultFontName: z.string().nullable().default(null),
+  language: languageSchema.default("en"),
   toolStatus: z.object({
     available: z.boolean(),
     ffmpegVersion: z.string().nullable(),
@@ -131,20 +148,26 @@ export type VideoInfo = z.infer<typeof videoInfoSchema>;
 export type AudioInfo = z.infer<typeof audioInfoSchema>;
 export type ClipSpec = z.infer<typeof clipSchema>;
 export type WatermarkSpec = z.infer<typeof watermarkSchema>;
-export type ExportRequest = z.infer<typeof exportRequestSchema>;
+export type ExportRequest = z.input<typeof exportRequestSchema>;
 export type ExportPlanView = z.infer<typeof exportPlanViewSchema>;
 export type ExportJob = z.infer<typeof exportJobSchema>;
 export type Settings = z.infer<typeof settingsSchema>;
+export type Language = z.infer<typeof languageSchema>;
 export type OutputSelection = z.infer<typeof outputSelectionSchema>;
 
-export interface VideoQuickEditorApi {
+export interface VideoQuickEditorApi extends AgentApi {
   chooseAssets(): Promise<AssetView[]>;
+  importLocalPaths(paths: string[]): Promise<AssetView[]>;
   importDroppedFiles(files: File[]): Promise<AssetView[]>;
   chooseFont(): Promise<{ id: string; name: string } | null>;
   chooseTool(kind: "ffmpeg" | "ffprobe"): Promise<string | null>;
   chooseOutput(suggestedName: string): Promise<OutputSelection | null>;
   getSettings(): Promise<Settings>;
-  updateSettings(update: { ffmpegPath?: string; ffprobePath?: string }): Promise<Settings>;
+  updateSettings(update: {
+    ffmpegPath?: string;
+    ffprobePath?: string;
+    language?: Language;
+  }): Promise<Settings>;
   checkTools(): Promise<Settings["toolStatus"]>;
   createProxy(assetId: string): Promise<string>;
   previewFrame(input: { assetId: string; atUs: number; watermark: WatermarkSpec }): Promise<string>;
@@ -156,4 +179,149 @@ export interface VideoQuickEditorApi {
   subscribeJobs(listener: (jobs: ExportJob[]) => void): () => void;
   revealOutput(jobId: string): Promise<void>;
   openOutput(jobId: string): Promise<void>;
+}
+
+export const draftRequestSchema = exportRequestSchema.extend({
+  clips: z.array(clipSchema).max(100),
+  watermark: z.object(watermarkSchema.shape),
+});
+export const editorDraftSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  selectedClipId: z.string().uuid().nullable(),
+  request: draftRequestSchema,
+});
+export type EditorDraft = z.infer<typeof editorDraftSchema>;
+export const agentErrorCodeSchema = z.enum([
+  "INVALID_ARGUMENT",
+  "ASSET_NOT_FOUND",
+  "STALE_REVISION",
+  "PLAN_EXPIRED",
+  "UNSUPPORTED_MEDIA",
+  "FONT_REQUIRED",
+  "OUTPUT_CONFLICT",
+  "TOOLS_UNAVAILABLE",
+  "EXPORT_FAILED",
+]);
+export const toolResultSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), data: z.unknown() }),
+  z.object({
+    ok: z.literal(false),
+    error: z.object({
+      code: agentErrorCodeSchema,
+      message: z.string(),
+      details: z.unknown().optional(),
+      retryable: z.boolean(),
+    }),
+  }),
+]);
+export type ToolResult = z.infer<typeof toolResultSchema>;
+const revision = z.number().int().nonnegative();
+export const agentToolSchemas = {
+  get_editor_context: z.object({}).strict(),
+  set_timeline: z
+    .object({ expectedRevision: revision, clips: z.array(clipSchema).max(100) })
+    .strict(),
+  set_watermark: z
+    .object({ expectedRevision: revision, watermark: z.object(watermarkSchema.shape) })
+    .strict(),
+  set_output: z
+    .object({
+      expectedRevision: revision,
+      outputProfile: z.enum(["source", "mp4-compatible"]),
+      mode: z.enum(["accurate", "normalize", "copy"]).optional(),
+      videoCodec: z.enum(["h264", "hevc"]).nullable().optional(),
+      normalize: exportRequestSchema.shape.normalize.optional(),
+      outputToken: z.string().uuid().nullable().optional(),
+    })
+    .strict(),
+  preview_frame: z
+    .object({ revision, clipId: z.string().uuid(), atUs: z.number().int().nonnegative() })
+    .strict(),
+  plan_export: z.object({ revision, clipIds: z.array(z.string().uuid()).min(1).max(100) }).strict(),
+  start_export: z
+    .object({ planId: z.string().uuid(), requestId: z.string().min(1).max(128) })
+    .strict(),
+  get_export_jobs: z.object({ jobIds: z.array(z.string().uuid()).optional() }).strict(),
+  cancel_export: z.object({ jobId: z.string().uuid() }).strict(),
+};
+export type AgentToolName = keyof typeof agentToolSchemas;
+export const editorContextSchema = z.object({
+  draft: editorDraftSchema,
+  assets: z.array(assetViewSchema.omit({ previewUrl: true })),
+  fontAvailable: z.boolean(),
+});
+export const modelConfigSchema = z.object({
+  provider: z.literal("openai-compatible").default("openai-compatible"),
+  baseURL: z.string().min(1),
+  modelId: z.string().trim().min(1).max(200),
+  contextBudget: z.number().int().min(8192).max(262144).default(16384),
+});
+export const modelUpdateSchema = modelConfigSchema.extend({
+  apiKey: z.string().max(4096).optional(),
+  deleteKey: z.boolean().optional(),
+});
+export type ModelConfig = z.infer<typeof modelConfigSchema>;
+export type ModelUpdate = z.input<typeof modelUpdateSchema>;
+export type ModelView = ModelConfig & { hasApiKey: boolean };
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant" | "tool" | "error";
+  text: string;
+  previewUrl?: string;
+  toolName?: AgentToolName;
+  toolOk?: boolean;
+}
+export interface AgentSession {
+  messages: ChatMessage[];
+  running: boolean;
+}
+export interface AgentApi {
+  getDraft(): Promise<EditorDraft>;
+  updateDraft(input: {
+    expectedRevision: number;
+    request: EditorDraft["request"];
+    selectedClipId: string | null;
+  }): Promise<EditorDraft>;
+  subscribeDraft(listener: (draft: EditorDraft) => void): () => void;
+  getModel(): Promise<ModelView | null>;
+  saveModel(input: ModelUpdate): Promise<ModelView>;
+  testModel(input: ModelUpdate): Promise<{ ok: boolean; message: string }>;
+  getAgentSession(): Promise<AgentSession>;
+  sendAgent(text: string, displayText?: string): Promise<void>;
+  stopAgent(): Promise<void>;
+  clearAgent(): Promise<void>;
+  subscribeAgent(listener: (session: AgentSession) => void): () => void;
+}
+
+/** Local wall-clock time, with filesystem-safe separators for export names. */
+export function timestampOutputName(
+  fileName: string,
+  outputProfile = "source",
+  date = new Date(),
+): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const timestamp = `${String(date.getFullYear()).padStart(4, "0")}_${pad(date.getMonth() + 1)}_${pad(date.getDate())}--${pad(date.getHours())}_${pad(date.getMinutes())}_${pad(date.getSeconds())}`;
+  const base = fileName.split(/[\\/]/).pop() ?? fileName;
+  const dot = base.lastIndexOf(".");
+  const extension = outputProfile === "mp4-compatible" ? ".mp4" : dot > 0 ? base.slice(dot) : "";
+  return `${timestamp}${extension}`;
+}
+
+/** A path-only message is handled locally, before any model request. One path per line. */
+export function parseImportPathText(text: string): string[] | null {
+  const lines = text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => {
+      const value = line.trim();
+      return (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+        ? value.slice(1, -1)
+        : value;
+    })
+    .filter(Boolean);
+  return lines.length &&
+    lines.every((line) => line.startsWith("/") || line.startsWith("~/") || line.startsWith("file:"))
+    ? lines
+    : null;
 }

@@ -4,3 +4,5 @@ export * from "./probe.js";
 export * from "./output.js";
 export * from "./planner.js";
 export * from "./runner.js";
+
+export * from "./watermark.js";
