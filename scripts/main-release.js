@@ -130,7 +130,11 @@ export async function publishRelease(
     "--prerelease",
     "--latest=false",
   ]);
-  return release.html_url;
+  const published = api.lookupRelease(repository, metadata.tag);
+  if (!published || published.draft || published.target_commitish !== metadata.sha)
+    throw new Error("Release publication could not be verified");
+  verifyAssets(published.assets, files);
+  return published.html_url;
 }
 async function prepare() {
   const path = join(desktop, "package.json");

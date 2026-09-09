@@ -116,16 +116,19 @@ test("publish creates a draft, verifies uploads, then publishes; reruns preserve
             draft: true,
             target_commitish: sha,
             assets: [],
-            html_url: "https://example.com/release",
+            html_url: "https://example.com/untagged-draft",
           };
         if (args[1] === "upload") release.assets = assets;
         if (args[1] === "edit") {
           assert.equal(args.includes("--latest=false"), true);
-          release.draft = false;
+          release = { ...release, draft: false, html_url: "https://example.com/release" };
         }
       },
     };
-    await publishRelease(metadata, directory, "owner/repo", api);
+    assert.equal(
+      await publishRelease(metadata, directory, "owner/repo", api),
+      "https://example.com/release",
+    );
     assert.deepEqual(operations, ["create", "upload", "edit"]);
     operations.length = 0;
     await publishRelease(metadata, directory, "owner/repo", api);
