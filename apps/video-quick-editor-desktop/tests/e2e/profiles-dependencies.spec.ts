@@ -44,12 +44,15 @@ test("dependency blocking and recovery preserve multi-model settings and real me
     "release/mac-arm64/Video Quick Editor.app/Contents/MacOS/Video Quick Editor",
   );
   let app = await electron.launch({ executablePath, args: [`--user-data-dir=${data}`] });
-  const patch = async () =>
+  const patch = async () => {
+    // Wait for app startup before evaluating Electron APIs through the debugger.
+    await app.firstWindow();
     await app.evaluate(({ safeStorage }) => {
       safeStorage.isEncryptionAvailable = () => true;
       safeStorage.encryptString = (s) => Buffer.from(s).reverse();
       safeStorage.decryptString = (b) => Buffer.from(b).reverse().toString();
     });
+  };
   try {
     await patch();
     const page = await app.firstWindow();
