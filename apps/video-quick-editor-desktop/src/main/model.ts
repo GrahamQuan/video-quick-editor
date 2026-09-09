@@ -7,6 +7,12 @@ import { generateText, streamText, tool, stepCountIs } from "ai";
 import { z } from "zod";
 import {
   modelUpdateSchema,
+  modelProfilesSchema,
+  modelProfileSchema,
+  saveModelProfileSchema,
+  testModelProfileSchema,
+  type ModelProfiles,
+  type SaveModelProfile,
   modelConfigSchema,
   type ModelConfig,
   type ModelUpdate,
@@ -63,82 +69,295 @@ export function createModel(config: ModelConfig, key: string, fetcher: typeof fe
     },
   }).chatModel(config.modelId);
 }
+
+const storedProfile = modelConfigSchema.extend({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1).max(80),
+  credentialRef: z.string().uuid().nullable(),
+});
+const storedCollection = z
+  .object({
+    version: z.literal(1),
+    revision: z.number().int().nonnegative(),
+    profiles: z.array(storedProfile).max(50),
+    selectedProfileId: z.string().uuid().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    if (new Set(value.profiles.map((p) => p.id)).size !== value.profiles.length)
+      ctx.addIssue({ code: "custom", message: "Duplicate profile ID" });
+  });
+type Stored = z.infer<typeof storedCollection>;
 export class ModelStore {
-  private config: ModelConfig | null = null;
-  private encrypted: string | null = null;
-  private credentialRef: string | null = null;
-  constructor(private directory: string) {}
-  async load() {
+  private state: Stored = { version: 1, revision: 0, profiles: [], selectedProfileId: null };
+  private encrypted = new Map<string, Buffer>();
+  private loadError: string | null = null;
+  private writes: Promise<unknown> = Promise.resolve();
+  constructor(
+    private directory: string,
+    private emit: (view: ModelProfiles) => void = () => {},
+  ) {}
+  private async persist(next: Stored) {
+    await mkdir(this.directory, { recursive: true });
+    const temporary = join(this.directory, `model-${randomUUID()}.tmp`);
     try {
-      const data = JSON.parse(await readFile(join(this.directory, "model.json"), "utf8"));
-      this.config = modelConfigSchema.parse(data.config);
-      this.config.baseURL = normalizeBaseURL(this.config.baseURL);
-      this.credentialRef = data.credentialRef ? z.string().uuid().parse(data.credentialRef) : null;
-      this.encrypted = this.credentialRef
-        ? (await readFile(join(this.directory, `${this.credentialRef}.credential`))).toString(
-            "base64",
-          )
-        : null;
-    } catch {
-      /* unconfigured */
+      await writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
+      await rename(temporary, join(this.directory, "model.json"));
+    } finally {
+      await rm(temporary, { force: true }).catch(() => {});
     }
   }
-  view(): ModelView | null {
-    return this.config ? { ...this.config, hasApiKey: !!this.encrypted } : null;
+  async load() {
+    this.loadError = null;
+    try {
+      let data;
+      try {
+        data = JSON.parse(await readFile(join(this.directory, "model.json"), "utf8"));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      }
+      let next: Stored;
+      let rewrite = false;
+      if (data.version === undefined && data.config) {
+        const legacy = z
+          .object({ config: modelConfigSchema, credentialRef: z.string().uuid().nullable() })
+          .parse(data);
+        const id = randomUUID();
+        next = {
+          version: 1,
+          revision: 1,
+          profiles: [
+            {
+              ...legacy.config,
+              baseURL: normalizeBaseURL(legacy.config.baseURL),
+              id,
+              name: legacy.config.modelId,
+              credentialRef: legacy.credentialRef,
+            },
+          ],
+          selectedProfileId: id,
+        };
+        rewrite = true;
+      } else next = storedCollection.parse(data);
+      next.profiles.forEach((p) => {
+        p.baseURL = normalizeBaseURL(p.baseURL);
+      });
+      if (!next.profiles.some((p) => p.id === next.selectedProfileId)) {
+        const selected = next.profiles[0]?.id ?? null;
+        if (selected !== next.selectedProfileId) {
+          next.selectedProfileId = selected;
+          next.revision++;
+          rewrite = true;
+        }
+      }
+      if (rewrite) await this.persist(next);
+      const encrypted = new Map<string, Buffer>();
+      for (const profile of next.profiles)
+        if (profile.credentialRef) {
+          try {
+            encrypted.set(
+              profile.credentialRef,
+              await readFile(join(this.directory, `${profile.credentialRef}.credential`)),
+            );
+          } catch {
+            /* only this profile loses availability */
+          }
+        }
+      this.state = next;
+      this.encrypted = encrypted;
+    } catch {
+      this.loadError =
+        "Model configuration could not be loaded; original file preserved. Retry after repairing the file / 模型配置读取失败，原文件已保留，请修复后重试";
+    }
   }
-  private key() {
-    if (!this.encrypted) return "";
+  list(): ModelProfiles {
+    return modelProfilesSchema.parse({
+      ...this.state,
+      error: this.loadError,
+      profiles: this.state.profiles.map((p) => {
+        let hasApiKey = false;
+        try {
+          hasApiKey = !!this.key(p.id);
+        } catch {
+          /* unavailable credential */
+        }
+        return modelProfileSchema.parse({ ...p, hasApiKey });
+      }),
+    });
+  }
+  view(): ModelView | null {
+    return this.list().profiles.find((p) => p.id === this.state.selectedProfileId) ?? null;
+  }
+  private key(id?: string): string {
+    const profile = this.state.profiles.find((p) => p.id === id);
+    if (!profile?.credentialRef) return "";
     if (!safeStorage.isEncryptionAvailable())
       throw new Error("System secure storage unavailable / 系统安全存储不可用");
-    return safeStorage.decryptString(Buffer.from(this.encrypted, "base64"));
+    try {
+      const bytes = this.encrypted.get(profile.credentialRef);
+      if (!bytes) throw new Error();
+      return safeStorage.decryptString(bytes);
+    } catch {
+      throw new Error(
+        "Credential unavailable; replace this profile key / 此配置凭证不可用，请重新设置密钥",
+      );
+    }
   }
-  private prepare(raw: ModelUpdate) {
+  private prepare(raw: ModelUpdate, id?: string) {
     const input = modelUpdateSchema.parse(raw);
     const config = modelConfigSchema.parse(input);
     config.baseURL = normalizeBaseURL(config.baseURL);
-    const changed = this.config?.baseURL !== config.baseURL;
-    if (changed && !input.apiKey && !input.deleteKey && this.encrypted)
-      throw new Error("Enter a new key for the changed endpoint / 更换地址后请明确输入密钥");
+    const existing = this.state.profiles.find((p) => p.id === id);
+    if (id && !existing) throw new Error("Unknown model profile / 模型配置不存在");
+    const changed = !!existing && existing.baseURL !== config.baseURL;
+    if (changed && existing.credentialRef && !input.apiKey && !input.deleteKey)
+      throw new Error(
+        "Enter a new key or clear the key for the changed endpoint / 更换地址后请输入新密钥或删除密钥",
+      );
     return {
       input,
       config,
-      key: input.deleteKey ? "" : input.apiKey || (!changed ? this.key() : ""),
+      existing,
+      key: input.deleteKey ? "" : input.apiKey || (!changed ? this.key(id) : ""),
     };
   }
+  private mutate(expectedRevision: number, operation: () => Promise<Stored>) {
+    const result = this.writes.then(async () => {
+      if (this.loadError) throw new Error(this.loadError);
+      if (expectedRevision !== this.state.revision)
+        throw new Error(
+          "STALE_REVISION: Model settings changed; reload and retry / 模型配置已更新，请刷新后重试",
+        );
+      const previous = this.state;
+      const next = await operation();
+      next.revision = previous.revision + 1;
+      await this.persist(storedCollection.parse(next));
+      this.state = next;
+      const used = new Set(next.profiles.map((p) => p.credentialRef));
+      for (const profile of previous.profiles)
+        if (profile.credentialRef && !used.has(profile.credentialRef)) {
+          this.encrypted.delete(profile.credentialRef);
+          await rm(join(this.directory, `${profile.credentialRef}.credential`), {
+            force: true,
+          }).catch(() => {});
+        }
+      const view = this.list();
+      this.emit(view);
+      return view;
+    });
+    this.writes = result.catch(() => {});
+    return result;
+  }
+  async saveProfile(raw: SaveModelProfile) {
+    const input = saveModelProfileSchema.parse(raw);
+    // Credentials are created only inside the serialized revision-checked write.
+    const created: { id: string | null } = { id: null };
+    try {
+      return await this.mutate(input.expectedRevision, async () => {
+        const { config, key, existing } = this.prepare(input, input.id);
+        if (!existing && this.state.profiles.length >= 50)
+          throw new Error("Maximum 50 model profiles / 最多 50 个模型配置");
+        let credentialRef = existing?.credentialRef ?? null;
+        if (input.apiKey || input.deleteKey) {
+          credentialRef = null;
+          if (key) {
+            if (!safeStorage.isEncryptionAvailable())
+              throw new Error("System secure storage unavailable / 系统安全存储不可用");
+            let bytes: Buffer;
+            try {
+              bytes = safeStorage.encryptString(key);
+            } catch {
+              throw new Error("Credential encryption failed / 凭证加密失败");
+            }
+            created.id = credentialRef = randomUUID();
+            await mkdir(this.directory, { recursive: true });
+            await writeFile(join(this.directory, `${credentialRef}.credential`), bytes, {
+              mode: 0o600,
+            });
+            this.encrypted.set(credentialRef, bytes);
+          }
+        }
+        const profile = {
+          ...config,
+          id: existing?.id ?? randomUUID(),
+          name: input.name,
+          credentialRef,
+        };
+        return {
+          ...this.state,
+          profiles: existing
+            ? this.state.profiles.map((p) => (p.id === existing.id ? profile : p))
+            : [...this.state.profiles, profile],
+          selectedProfileId: this.state.selectedProfileId ?? profile.id,
+        };
+      });
+    } catch (error) {
+      if (created.id) {
+        this.encrypted.delete(created.id);
+        await rm(join(this.directory, `${created.id}.credential`), { force: true }).catch(() => {});
+      }
+      throw error;
+    }
+  }
+  deleteProfile(id: string, expectedRevision: number) {
+    return this.mutate(expectedRevision, async () => {
+      if (!this.state.profiles.some((p) => p.id === id))
+        throw new Error("Unknown model profile / 模型配置不存在");
+      const profiles = this.state.profiles.filter((p) => p.id !== id);
+      return {
+        ...this.state,
+        profiles,
+        selectedProfileId:
+          this.state.selectedProfileId === id
+            ? (profiles[0]?.id ?? null)
+            : this.state.selectedProfileId,
+      };
+    });
+  }
+  selectProfile(id: string, expectedRevision: number) {
+    return this.mutate(expectedRevision, async () => {
+      if (!this.state.profiles.some((p) => p.id === id))
+        throw new Error("Unknown model profile / 模型配置不存在");
+      return { ...this.state, selectedProfileId: id };
+    });
+  }
   async save(raw: ModelUpdate) {
-    const { config, key } = this.prepare(raw);
-    if (key && !safeStorage.isEncryptionAvailable())
-      throw new Error("System secure storage unavailable / 系统安全存储不可用");
-    const encrypted = key ? safeStorage.encryptString(key).toString("base64") : null;
-    await mkdir(this.directory, { recursive: true });
-    const credentialRef = encrypted ? randomUUID() : null;
-    if (credentialRef)
-      await writeFile(
-        join(this.directory, `${credentialRef}.credential`),
-        Buffer.from(encrypted!, "base64"),
-        { mode: 0o600 },
-      );
-    const temporary = join(this.directory, `model-${randomUUID()}.tmp`);
-    await writeFile(temporary, JSON.stringify({ config, credentialRef }), { mode: 0o600 });
-    await rename(temporary, join(this.directory, "model.json"));
-    if (this.credentialRef)
-      await rm(join(this.directory, `${this.credentialRef}.credential`), { force: true });
-    this.credentialRef = credentialRef;
-    this.config = config;
-    this.encrypted = encrypted;
-    return this.view()!;
+    const id = this.state.selectedProfileId ?? undefined;
+    const input = modelUpdateSchema.parse(raw);
+    const result = await this.saveProfile({
+      ...input,
+      id,
+      name: this.state.profiles.find((p) => p.id === id)?.name ?? input.modelId,
+      expectedRevision: this.state.revision,
+    });
+    return result.profiles.find((p) => p.id === result.selectedProfileId)!;
   }
   snapshot() {
-    if (!this.config) throw new Error("Configure a model in Settings / 请先配置模型");
-    const key = this.key();
+    if (this.loadError) throw new Error(this.loadError);
+    const profile = this.state.profiles.find((p) => p.id === this.state.selectedProfileId);
+    if (!profile) throw new Error("Configure a model in Settings / 请先配置模型");
+    const key = this.key(profile.id);
     if (!key) throw new Error("API key required / 请设置 API key");
-    return { config: { ...this.config }, model: createModel({ ...this.config }, key) };
+    const config = modelConfigSchema.parse(profile);
+    return {
+      config,
+      profile: { id: profile.id, name: profile.name, modelId: profile.modelId },
+      model: createModel(config, key),
+    };
   }
-  async test(raw: ModelUpdate) {
+  async testProfile(raw: z.input<typeof testModelProfileSchema>) {
+    const input = testModelProfileSchema.parse(raw);
+    // An unsaved new profile must never inherit the selected profile's credential.
+    return this.test({ ...input }, true);
+  }
+  async test(raw: ModelUpdate & { id?: string | undefined }, exactProfile = false) {
     try {
       let prepared;
       try {
-        prepared = this.prepare(raw);
+        prepared = this.prepare(
+          raw,
+          raw.id ?? (exactProfile ? undefined : (this.state.selectedProfileId ?? undefined)),
+        );
       } catch {
         return {
           ok: false,

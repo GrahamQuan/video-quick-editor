@@ -49,6 +49,25 @@ export function buildContext(
 }
 export class AgentRunner {
   session: AgentSession = { messages: [], running: false };
+  private reservations = new Map<
+    string,
+    { snapshot: ReturnType<ModelStore["snapshot"]>; expires: number }
+  >();
+  reserve() {
+    for (const [id, value] of this.reservations)
+      if (value.expires < Date.now()) this.reservations.delete(id);
+    if (this.session.running || this.clearing || this.reservations.size)
+      throw new Error("Agent already running / 助手正在运行");
+    const snapshot = this.models.snapshot();
+    const token = randomUUID();
+    this.reservations.set(token, { snapshot, expires: Date.now() + 300000 });
+    const timer = setTimeout(() => this.reservations.delete(token), 300000);
+    timer.unref();
+    return { token, profile: snapshot.profile };
+  }
+  release(token: string) {
+    this.reservations.delete(token);
+  }
   private controller: AbortController | null = null;
   private clearing = false;
   private finished: Promise<void> = Promise.resolve();
@@ -74,6 +93,7 @@ export class AgentRunner {
     try {
       this.stop();
       await this.finished;
+      this.reservations.clear();
       this.history = [];
       this.users = [];
       this.session = { messages: [], running: false };
@@ -82,10 +102,16 @@ export class AgentRunner {
       this.clearing = false;
     }
   }
-  async send(raw: string, displayText?: string) {
+  async send(raw: string, displayText?: string, reservationToken?: string) {
     const input = z.string().trim().min(1).max(8000).parse(raw);
     if (this.session.running || this.clearing) throw new Error("Agent already running");
-    const { model, config } = this.models.snapshot();
+    const reservation = reservationToken ? this.reservations.get(reservationToken) : undefined;
+    if (reservationToken && (!reservation || reservation.expires < Date.now()))
+      throw new Error("Send reservation expired; retry / 发送已过期，请重试");
+    if (!reservationToken && this.reservations.size)
+      throw new Error("Agent import in progress / 助手正在导入");
+    if (reservationToken) this.release(reservationToken);
+    const { model, config, profile } = reservation?.snapshot ?? this.models.snapshot();
     const messages = buildContext(
       this.history,
       this.users,
@@ -93,8 +119,14 @@ export class AgentRunner {
       input,
       config.contextBudget,
     );
-    this.session.messages.push({ id: randomUUID(), role: "user", text: displayText ?? input });
+    this.session.messages.push({
+      id: randomUUID(),
+      role: "user",
+      text: displayText ?? input,
+      model: profile,
+    });
     this.session.running = true;
+    this.session.model = profile;
     this.finished = new Promise<void>((resolve) => {
       this.finishTurn = resolve;
     });
@@ -150,7 +182,7 @@ export class AgentRunner {
         if (event.type === "start-step") response = undefined;
         if (event.type === "text-delta") {
           if (!response) {
-            response = { id: randomUUID(), role: "assistant", text: "" };
+            response = { id: randomUUID(), role: "assistant", text: "", model: profile };
             this.session.messages.push(response);
           }
           response.text += event.text;

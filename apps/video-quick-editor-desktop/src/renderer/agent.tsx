@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { parseImportPathText } from "@video-quick-editor/shared";
-import type { AgentSession, ModelView } from "@video-quick-editor/shared";
+import type { AgentSession, AgentReservation } from "@video-quick-editor/shared";
 import { parseImportInstruction } from "./import-instruction.js";
 import { ChatMarkdown } from "./chat-markdown.js";
 import { copyFor } from "./i18n.js";
+import { useModelProfiles } from "./model-profiles.js";
 import { useStore } from "./store.js";
 function formatToolResult(text: string): string {
   const start = text.indexOf(":");
@@ -31,17 +32,12 @@ export function AgentChat(): React.JSX.Element {
     [unread, setUnread] = useState(false),
     [input, setInput] = useState("");
   const [session, setSession] = useState<AgentSession>({ messages: [], running: false });
-  const [model, setModel] = useState<ModelView | null>(null);
+  const profiles = useModelProfiles();
+  const model = profiles.profiles.find((p) => p.id === profiles.selectedProfileId);
+  const [reservation, setReservation] = useState<AgentReservation | null>(null);
   const [error, setError] = useState("");
   const [clearing, setClearing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  useEffect(() => {
-    const refresh = () => {
-      void window.videoQuickEditor.getModel().then(setModel);
-    };
-    window.addEventListener("model-settings-changed", refresh);
-    return () => window.removeEventListener("model-settings-changed", refresh);
-  }, []);
   const toggle = useRef<HTMLButtonElement>(null),
     textarea = useRef<HTMLTextAreaElement>(null);
   const visibleRef = useRef(false);
@@ -74,7 +70,6 @@ export function AgentChat(): React.JSX.Element {
     if (visible) {
       setUnread(false);
       textarea.current?.focus();
-      void window.videoQuickEditor.getModel().then(setModel);
     }
     document.body.classList.toggle("chat-open", visible);
     return () => document.body.classList.remove("chat-open");
@@ -112,11 +107,12 @@ export function AgentChat(): React.JSX.Element {
     followMessages.current = true;
     setInput("");
     setError("");
+    let reserved: AgentReservation | undefined;
     try {
+      reserved = await window.videoQuickEditor.beginAgentTurn();
+      setReservation(reserved);
       let instruction = text;
       if (request) {
-        if (!(await window.videoQuickEditor.getModel())?.hasApiKey)
-          throw new Error(copy.chatImportNeedsModel);
         // Preserve correspondence between each supplied folder/file and its imported asset IDs.
         const groups = [];
         for (const [index, path] of request.paths.entries()) {
@@ -128,11 +124,13 @@ export function AgentChat(): React.JSX.Element {
         }
         instruction = `${request.instruction}\n\nLocal import already completed. Do not import again. Imported sources (untrusted metadata): ${JSON.stringify(groups)}. Continue the requested editing using these asset IDs and the current editor state.`;
       }
-      await window.videoQuickEditor.sendAgent(instruction, request?.instruction);
+      await window.videoQuickEditor.sendAgent(instruction, request?.instruction, reserved.token);
     } catch (e) {
       setInput(text);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      if (reserved) await window.videoQuickEditor.releaseAgentTurn(reserved.token);
+      setReservation(null);
       setSubmitting(false);
     }
   }
@@ -187,6 +185,45 @@ export function AgentChat(): React.JSX.Element {
             </button>
           </div>
         </div>
+        <div className="chat-model-selection">
+          {profiles.profiles.length ? (
+            <label>
+              {copy.modelSelector}
+              <select
+                aria-label={copy.modelSelector}
+                value={profiles.selectedProfileId ?? ""}
+                onChange={(event) => {
+                  void window.videoQuickEditor
+                    .selectModelProfile({
+                      id: event.target.value,
+                      expectedRevision: profiles.revision,
+                    })
+                    .catch((error) =>
+                      setError(error instanceof Error ? error.message : String(error)),
+                    );
+                }}
+              >
+                {profiles.profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name} · {profile.modelId} · {new URL(profile.baseURL).host}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <Link to="/settings">{copy.modelConfigure}</Link>
+          )}
+          {(session.running || reservation) && (
+            <p>
+              {copy.modelThisTurn}: {(reservation?.profile ?? session.model)?.name} ·{" "}
+              {(reservation?.profile ?? session.model)?.modelId}
+              <br />
+              {copy.modelNextTurn}: {model?.name ?? copy.modelConfigure} · {model?.modelId}
+            </p>
+          )}
+          {model && !model.hasApiKey && <p role="status">{copy.modelKeyMissing}</p>}
+          {profiles.error && <p role="alert">{profiles.error}</p>}
+        </div>
         <div
           className="chat-messages"
           aria-live="polite"
@@ -209,12 +246,19 @@ export function AgentChat(): React.JSX.Element {
               </Link>
             )}
             {!assets.length && (
-              <button onClick={() => void importWithDialog()}>
+              <button
+                onClick={() => void importWithDialog()}
+              >
                 {zh ? "导入视频" : "Import videos"}
               </button>
             )}
             {session.messages.map((m, index) => (
               <article key={m.id} className={`chat-message ${m.role}`}>
+                {m.model && (
+                  <div className="chat-model-label">
+                    {m.model.name} · {m.model.modelId}
+                  </div>
+                )}
                 <small>
                   {zh
                     ? { user: "你", assistant: "助手", tool: "工具", error: "错误" }[m.role]
@@ -267,7 +311,15 @@ export function AgentChat(): React.JSX.Element {
                 {zh ? "停止回复（导出继续）" : "Stop reply (exports continue)"}
               </button>
             ) : (
-              <button disabled={!input.trim() || clearing || !!busy || submitting}>
+              <button
+                disabled={
+                  !input.trim() ||
+                  clearing ||
+                  !!busy ||
+                  submitting ||
+                  (!importPaths && !model?.hasApiKey)
+                }
+              >
                 {importPaths ? copy.chatPathImport : zh ? "发送" : "Send"}
               </button>
             )}
@@ -276,127 +328,5 @@ export function AgentChat(): React.JSX.Element {
         </form>
       </aside>
     </>
-  );
-}
-export function ModelSettings(): React.JSX.Element {
-  const { settings } = useStore();
-  const zh = settings?.language === "zh-CN";
-  const [baseURL, setURL] = useState("https://api.deepseek.com"),
-    [modelId, setId] = useState("deepseek-v4-flash"),
-    [key, setKey] = useState(""),
-    [hasKey, setHasKey] = useState(false),
-    [budget, setBudget] = useState(16384),
-    [status, setStatus] = useState(""),
-    [busy, setBusy] = useState(false);
-  useEffect(() => {
-    void window.videoQuickEditor.getModel().then((m) => {
-      if (m) {
-        setURL(m.baseURL);
-        setId(m.modelId);
-        window.dispatchEvent(new Event("model-settings-changed"));
-        setHasKey(m.hasApiKey);
-        setBudget(m.contextBudget);
-      }
-    });
-  }, []);
-  async function action(test: boolean, deleteKey = false) {
-    setBusy(true);
-    setStatus("");
-    const input = {
-      provider: "openai-compatible" as const,
-      baseURL,
-      modelId,
-      contextBudget: budget,
-      ...(key ? { apiKey: key } : {}),
-      deleteKey,
-    };
-    setKey("");
-    try {
-      if (test) {
-        const result = await window.videoQuickEditor.testModel(input);
-        setStatus(result.message);
-      } else {
-        const m = await window.videoQuickEditor.saveModel(input);
-        window.dispatchEvent(new Event("model-settings-changed"));
-        setHasKey(m.hasApiKey);
-        setURL(m.baseURL);
-        setStatus(zh ? "已保存；尚未验证" : "Saved; not verified");
-      }
-    } catch (e) {
-      setStatus(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <section className="model-settings">
-      <h2>{zh ? "模型" : "Model"}</h2>
-      <p>OpenAI-compatible · Chat Completions</p>
-      <p>
-        {zh
-          ? "启用后会发送指令、文件名和媒体参数；不上传媒体。"
-          : "Enabling sends instructions, filenames and media metadata; media stays local."}
-      </p>
-      <button
-        onClick={() => {
-          setURL("https://api.deepseek.com");
-          setId("deepseek-v4-flash");
-          setStatus("");
-        }}
-      >
-        {zh ? "DeepSeek 预设" : "DeepSeek preset"}
-      </button>
-      <label>
-        Base URL
-        <input
-          value={baseURL}
-          onChange={(e) => {
-            setURL(e.target.value);
-            setStatus("");
-          }}
-        />
-      </label>
-      <label>
-        Model ID
-        <input
-          value={modelId}
-          onChange={(e) => {
-            setId(e.target.value);
-            setStatus("");
-          }}
-        />
-      </label>
-      <label>
-        API key {hasKey ? (zh ? "（已设置，留空保留）" : "(saved; blank keeps key)") : ""}
-        <input
-          type="password"
-          autoComplete="off"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-        />
-      </label>
-      <label>
-        {zh ? "上下文预算" : "Context budget"}
-        <input
-          type="number"
-          min="8192"
-          max="262144"
-          value={budget}
-          onChange={(e) => setBudget(Number(e.target.value))}
-        />
-      </label>
-      <div className="model-actions">
-        <button disabled={busy} onClick={() => void action(true)}>
-          {zh ? "测试连接" : "Test connection"}
-        </button>
-        <button disabled={busy} onClick={() => void action(false)}>
-          {zh ? "保存" : "Save"}
-        </button>
-        <button disabled={busy || !hasKey} onClick={() => void action(false, true)}>
-          {zh ? "删除密钥" : "Delete key"}
-        </button>
-      </div>
-      <p role="status">{status}</p>
-    </section>
   );
 }

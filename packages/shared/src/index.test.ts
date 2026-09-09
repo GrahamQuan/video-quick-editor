@@ -71,3 +71,36 @@ it("legacy requests retain source and tools reject arbitrary paths", () => {
     }).success,
   ).toBe(false);
 });
+
+import { saveModelProfileSchema, modelProfilesSchema } from "./index.js";
+it("validates model collection limits and strips credential fields from public views", () => {
+  const input = {
+    expectedRevision: 0,
+    name: "  Personal  ",
+    baseURL: "https://example.com",
+    modelId: "same-model",
+  };
+  expect(saveModelProfileSchema.parse(input).name).toBe("Personal");
+  expect(saveModelProfileSchema.safeParse({ ...input, name: " " }).success).toBe(false);
+  expect(saveModelProfileSchema.safeParse({ ...input, name: "x".repeat(81) }).success).toBe(false);
+  expect(saveModelProfileSchema.safeParse({ ...input, expectedRevision: -1 }).success).toBe(false);
+  const profile = {
+    ...input,
+    id: "00000000-0000-4000-8000-000000000001",
+    hasApiKey: true,
+    credentialRef: "hidden",
+    apiKey: "secret",
+  };
+  const collection = {
+    version: 1,
+    revision: 0,
+    profiles: [profile],
+    selectedProfileId: profile.id,
+  };
+  expect(JSON.stringify(modelProfilesSchema.parse(collection))).not.toMatch(
+    /secret|hidden|credentialRef|apiKey/,
+  );
+  expect(
+    modelProfilesSchema.safeParse({ ...collection, profiles: Array(51).fill(profile) }).success,
+  ).toBe(false);
+});

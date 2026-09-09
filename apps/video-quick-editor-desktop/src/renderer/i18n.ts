@@ -1,6 +1,25 @@
 import type { Language } from "@video-quick-editor/shared";
 
 const english = {
+  models: "Models",
+  modelAdd: "Add model",
+  modelName: "Profile name",
+  modelSelected: "Selected",
+  modelKeyReady: "Key configured",
+  modelKeyMissing: "API key unavailable — edit this model in Settings",
+  modelKeepKey: "(saved; blank keeps key)",
+  modelBudget: "Context budget",
+  modelTest: "Test connection",
+  modelSave: "Save model",
+  modelDeleteKey: "Delete key",
+  modelDelete: "Delete model",
+  modelDeleted: "Model deleted",
+  modelSaved: "Saved; not verified",
+  modelSelector: "Chat model",
+  modelConfigure: "Configure a model",
+  modelThisTurn: "This turn",
+  modelNextTurn: "Next turn",
+
   chatImportNeedsModel: "Configure a model in Settings to import and edit in one request.",
   chatPathPlaceholder: "Describe your edit, or paste file / folder paths…",
   chatPathHint:
@@ -132,9 +151,32 @@ const english = {
     "Re-encoding supports standard SDR, 8-bit input without rotation metadata. HDR, 10-bit, and rotated input require copy mode. Preview proxies are playback-only; exports always read the original files.",
 } as const;
 
-export type Copy = { [Key in keyof typeof english]: string };
+export type Copy = {
+  [Key in keyof typeof english]: (typeof english)[Key] extends string
+    ? string
+    : { [Nested in keyof (typeof english)[Key]]: string };
+};
 
 const chinese = {
+  models: "模型配置",
+  modelAdd: "新增模型",
+  modelName: "配置名称",
+  modelSelected: "已选中",
+  modelKeyReady: "已配置密钥",
+  modelKeyMissing: "API key 不可用，请在设置中编辑此模型",
+  modelKeepKey: "（已保存，留空保留）",
+  modelBudget: "上下文预算",
+  modelTest: "测试连接",
+  modelSave: "保存模型",
+  modelDeleteKey: "删除密钥",
+  modelDelete: "删除模型",
+  modelDeleted: "已删除模型",
+  modelSaved: "已保存；尚未验证",
+  modelSelector: "聊天模型",
+  modelConfigure: "配置模型",
+  modelThisTurn: "本轮使用",
+  modelNextTurn: "下一轮使用",
+
   chatImportNeedsModel: "请先在设置中配置模型，再使用一句话导入并剪辑。",
   chatPathPlaceholder: "描述剪辑需求，或粘贴文件 / 文件夹路径…",
   chatPathHint: "粘贴路径，或说：导入“路径”，然后保留前 5 秒。文件夹仅导入第一层视频。",

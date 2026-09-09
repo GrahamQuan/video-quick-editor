@@ -263,17 +263,57 @@ export const modelUpdateSchema = modelConfigSchema.extend({
 export type ModelConfig = z.infer<typeof modelConfigSchema>;
 export type ModelUpdate = z.input<typeof modelUpdateSchema>;
 export type ModelView = ModelConfig & { hasApiKey: boolean };
+export const modelProfileSchema = modelConfigSchema.extend({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1).max(80),
+  hasApiKey: z.boolean(),
+});
+export const modelProfilesSchema = z.object({
+  version: z.literal(1),
+  revision: z.number().int().nonnegative(),
+  profiles: z.array(modelProfileSchema).max(50),
+  selectedProfileId: z.string().uuid().nullable(),
+  error: z.string().nullable().default(null),
+});
+export const saveModelProfileSchema = modelUpdateSchema.extend({
+  expectedRevision: z.number().int().nonnegative(),
+  id: z.string().uuid().optional(),
+  name: z.string().trim().min(1).max(80),
+});
+export const modelProfileMutationSchema = z
+  .object({ expectedRevision: z.number().int().nonnegative(), id: z.string().uuid() })
+  .strict();
+export const testModelProfileSchema = modelUpdateSchema.extend({
+  id: z.string().uuid().optional(),
+});
+export const modelTestResultSchema = z.object({ ok: z.boolean(), message: z.string() });
+export const modelIdentitySchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  modelId: z.string(),
+});
+export const agentReservationSchema = z.object({
+  token: z.string().uuid(),
+  profile: modelIdentitySchema,
+});
+export type ModelProfile = z.infer<typeof modelProfileSchema>;
+export type ModelProfiles = z.infer<typeof modelProfilesSchema>;
+export type SaveModelProfile = z.input<typeof saveModelProfileSchema>;
+export type ModelIdentity = z.infer<typeof modelIdentitySchema>;
+export type AgentReservation = z.infer<typeof agentReservationSchema>;
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "tool" | "error";
   text: string;
   previewUrl?: string;
+  model?: ModelIdentity;
   toolName?: AgentToolName;
   toolOk?: boolean;
 }
 export interface AgentSession {
   messages: ChatMessage[];
   running: boolean;
+  model?: ModelIdentity;
 }
 export interface AgentApi {
   getDraft(): Promise<EditorDraft>;
@@ -283,11 +323,21 @@ export interface AgentApi {
     selectedClipId: string | null;
   }): Promise<EditorDraft>;
   subscribeDraft(listener: (draft: EditorDraft) => void): () => void;
+  listModelProfiles(): Promise<ModelProfiles>;
+  saveModelProfile(input: SaveModelProfile): Promise<ModelProfiles>;
+  deleteModelProfile(input: z.infer<typeof modelProfileMutationSchema>): Promise<ModelProfiles>;
+  selectModelProfile(input: z.infer<typeof modelProfileMutationSchema>): Promise<ModelProfiles>;
+  testModelProfile(
+    input: z.input<typeof testModelProfileSchema>,
+  ): Promise<z.infer<typeof modelTestResultSchema>>;
+  subscribeModelProfiles(listener: (profiles: ModelProfiles) => void): () => void;
+  beginAgentTurn(): Promise<AgentReservation>;
+  releaseAgentTurn(token: string): Promise<void>;
   getModel(): Promise<ModelView | null>;
   saveModel(input: ModelUpdate): Promise<ModelView>;
   testModel(input: ModelUpdate): Promise<{ ok: boolean; message: string }>;
   getAgentSession(): Promise<AgentSession>;
-  sendAgent(text: string, displayText?: string): Promise<void>;
+  sendAgent(text: string, displayText?: string, reservationToken?: string): Promise<void>;
   stopAgent(): Promise<void>;
   clearAgent(): Promise<void>;
   subscribeAgent(listener: (session: AgentSession) => void): () => void;

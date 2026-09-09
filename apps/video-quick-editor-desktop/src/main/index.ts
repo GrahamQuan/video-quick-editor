@@ -33,6 +33,12 @@ import {
 } from "@video-quick-editor/media-core";
 import {
   modelUpdateSchema,
+  modelProfilesSchema,
+  saveModelProfileSchema,
+  modelProfileMutationSchema,
+  testModelProfileSchema,
+  modelTestResultSchema,
+  agentReservationSchema,
   exportRequestSchema,
   settingsSchema,
   watermarkSchema,
@@ -565,14 +571,35 @@ function installIpc(): void {
       .parse(raw);
     return editor.update(i.expectedRevision, i.request, i.selectedClipId);
   });
+  handle("model:profiles", () => modelProfilesSchema.parse(models.list()));
+  handle("model:save-profile", async (_event, raw) =>
+    modelProfilesSchema.parse(await models.saveProfile(saveModelProfileSchema.parse(raw))),
+  );
+  handle("model:delete-profile", async (_event, raw) => {
+    const input = modelProfileMutationSchema.parse(raw);
+    return modelProfilesSchema.parse(await models.deleteProfile(input.id, input.expectedRevision));
+  });
+  handle("model:select-profile", async (_event, raw) => {
+    const input = modelProfileMutationSchema.parse(raw);
+    return modelProfilesSchema.parse(await models.selectProfile(input.id, input.expectedRevision));
+  });
+  handle("model:test-profile", async (_event, raw) =>
+    modelTestResultSchema.parse(await models.testProfile(testModelProfileSchema.parse(raw))),
+  );
+  handle("agent:reserve", () => agentReservationSchema.parse(agent.reserve()));
+  handle("agent:release", (_event, raw) => agent.release(z.string().uuid().parse(raw)));
   handle("model:get", () => models.view());
   handle("model:save", async (_event, raw) => await models.save(modelUpdateSchema.parse(raw)));
   handle("model:test", async (_event, raw) => await models.test(modelUpdateSchema.parse(raw)));
   handle("agent:get", () => agent.snapshot());
   handle(
     "agent:send",
-    async (_event, raw, displayText) =>
-      await agent.send(z.string().parse(raw), z.string().max(8000).optional().parse(displayText)),
+    async (_event, raw, displayText, reservationToken) =>
+      await agent.send(
+        z.string().parse(raw),
+        z.string().max(8000).optional().parse(displayText),
+        z.string().uuid().optional().parse(reservationToken),
+      ),
   );
   handle("agent:stop", () => agent.stop());
   handle("agent:clear", async () => await agent.clear());
@@ -738,7 +765,9 @@ async function createWindow(): Promise<void> {
 
 void app.whenReady().then(async () => {
   await loadSettings();
-  models = new ModelStore(app.getPath("userData"));
+  models = new ModelStore(app.getPath("userData"), (view) =>
+    mainWindow?.webContents.send("model:profiles", view),
+  );
   await models.load();
   agent = new AgentRunner(editor, models, (session) =>
     mainWindow?.webContents.send("agent:session", session),

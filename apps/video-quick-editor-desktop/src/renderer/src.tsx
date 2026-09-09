@@ -1,5 +1,6 @@
 import { TrimRange } from "./trim-range.js";
-import { AgentChat, ModelSettings } from "./agent.js";
+import { AgentChat } from "./agent.js";
+import { ModelSettings } from "./model-profiles.js";
 import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
