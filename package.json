@@ -12,7 +12,8 @@
     "lint": "oxlint --deny-warnings scripts && turbo lint",
     "test": "turbo test",
     "test:e2e": "turbo test:e2e --filter=@video-quick-editor/desktop",
-    "package": "turbo package --filter=@video-quick-editor/desktop"
+    "package": "turbo package --filter=@video-quick-editor/desktop",
+    "package:dir": "turbo package:dir --filter=@video-quick-editor/desktop"
   },
   "devDependencies": {
     "oxfmt": "0.66.0",

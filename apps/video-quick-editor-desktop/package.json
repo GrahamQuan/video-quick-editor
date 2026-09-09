@@ -13,7 +13,8 @@
     "lint": "oxlint --type-aware --deny-warnings src tests vite.config.ts playwright.config.ts vitest.config.ts",
     "test": "vitest run --passWithNoTests",
     "test:e2e": "vite build && electron-builder --mac --dir && node ../../scripts/ensure-electron-signature.js \"release/mac-arm64/Video Quick Editor.app\" && playwright test",
-    "package": "vite build && electron-builder --mac --dir"
+    "package": "vite build && electron-builder --mac dmg --arm64",
+    "package:dir": "vite build && electron-builder --mac --dir --arm64"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.44",
@@ -53,13 +54,17 @@
     },
     "files": [
       "out/**/*",
-      "package.json"
+      "package.json",
+      "!**/.turbo{,/**/*}",
+      "!node_modules/@video-quick-editor/*/src{,/**/*}",
+      "!node_modules/@video-quick-editor/*/tests{,/**/*}",
+      "!node_modules/@video-quick-editor/*/{tsconfig*,vite.config.*,vitest.config.*}"
     ],
     "electronDist": "node_modules/electron/dist",
     "mac": {
       "target": [
         {
-          "target": "dir",
+          "target": "dmg",
           "arch": [
             "arm64"
           ]
@@ -67,6 +72,21 @@
       ],
       "category": "public.app-category.video"
     },
-    "afterPack": "../../scripts/after-pack.cjs"
+    "afterPack": "../../scripts/after-pack.cjs",
+    "dmg": {
+      "artifactName": "Video-Quick-Editor-${version}-mac-${arch}.${ext}",
+      "contents": [
+        {
+          "x": 140,
+          "y": 200
+        },
+        {
+          "x": 420,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
   }
 }
