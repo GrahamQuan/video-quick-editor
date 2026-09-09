@@ -25,7 +25,16 @@ jobs:
           node-version: "24"
           cache: pnpm
       - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile
+        # Cached postinstall output can flatten Electron framework symlinks.
+        # Keep the package download cache, but extract Electron on every runner.
+        run: pnpm install --frozen-lockfile --config.side-effects-cache=false
+      - name: Verify Electron framework symlinks
+        run: |
+          frameworks="apps/video-quick-editor-desktop/node_modules/electron/dist/Electron.app/Contents/Frameworks"
+          for framework in "$frameworks"/*.framework; do
+            test -L "$framework/Versions/Current"
+            test -L "$framework/Resources"
+          done
       - name: Prepare runner media tools
         run: |
           test "$(uname -m)" = arm64
