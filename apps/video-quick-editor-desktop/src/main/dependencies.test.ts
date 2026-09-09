@@ -5,6 +5,43 @@ import { it, expect } from "vitest";
 import { Dependencies, requiredEncoders, requiredFilters } from "./dependencies.js";
 const capabilities = (names: string[]) =>
   names.map((name) => ` ... ${name} description`).join("\n");
+it.each(["T.C", "T."])(
+  "recognizes filter rows with %s flags and rejects similarly named filters",
+  async (flags) => {
+    const directory = await mkdtemp(join(tmpdir(), "dependency-filter-format-"));
+    try {
+      await Promise.all(
+        ["ffmpeg", "ffprobe"].map((tool) =>
+          writeFile(join(directory, tool), "test", { mode: 0o700 }),
+        ),
+      );
+      let missing = false;
+      const service = new Dependencies(() => {}, {
+        candidates: (tool) => [join(directory, tool)],
+        run: async (path, args) => ({
+          stdout:
+            args[0] === "-version"
+              ? `${path.endsWith("ffmpeg") ? "ffmpeg" : "ffprobe"} version test`
+              : args.includes("-encoders")
+                ? requiredEncoders.map((name) => ` V....D ${name} Encoder description`).join("\n")
+                : "Filters:\n  T.. = Timeline support\n  ------\n" +
+                  requiredFilters
+                    .map(
+                      (name) =>
+                        ` ${flags} ${(missing && name === "drawtext" ? "drawtext_extra" : name).padEnd(17)} V->V      Filter description drawtext`,
+                    )
+                    .join("\n"),
+          stderr: "",
+        }),
+      });
+      expect((await service.check()).status).toBe("ready");
+      missing = true;
+      expect((await service.check()).tools[0]?.missingFilters).toEqual(["drawtext"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 it(
   "classifies missing, permissions, start failures and timeout using temporary executables",
   { timeout: 10000 },

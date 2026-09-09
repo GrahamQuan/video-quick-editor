@@ -141,7 +141,9 @@ export class Dependencies {
               new Set(
                 text
                   .split("\n")
-                  .map((line) => /^\s*[A-Z.]{3,6}\s+(\S+)\s/.exec(line)?.[1])
+                  // FFmpeg 9 uses two filter flags; older versions use three.
+                  // Encoder rows still have six flags. Match whole names only.
+                  .map((line) => /^\s*[A-Z.]{2,6}\s+(\S+)\s/.exec(line)?.[1])
                   .filter(Boolean),
               );
             const encoderNames = names(encoders!.stdout),
