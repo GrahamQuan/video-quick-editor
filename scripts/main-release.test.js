@@ -4,9 +4,40 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { releaseMetadata, publishRelease, verifyAssets } from "./main-release.js";
+import { releaseMetadata, publishRelease, verifyAssets, lookupTag } from "./main-release.js";
 
 const sha = "a".repeat(40);
+test("tag lookup handles new tags and resolves existing tags without suppressing API failures", () => {
+  const ref = "repos/owner/repo/git/ref/tags/v0.1.0-main.1";
+  const commit = "repos/owner/repo/commits/v0.1.0-main.1";
+  assert.equal(
+    lookupTag("owner/repo", "v0.1.0-main.1", (endpoint) => {
+      assert.equal(endpoint, ref);
+      return null;
+    }),
+    null,
+  );
+  const calls = [];
+  assert.equal(
+    lookupTag("owner/repo", "v0.1.0-main.1", (endpoint) => {
+      calls.push(endpoint);
+      return endpoint === ref ? { object: { type: "tag" } } : { sha };
+    }),
+    sha,
+  );
+  assert.deepEqual(calls, [ref, commit]);
+  assert.throws(
+    () =>
+      lookupTag("owner/repo", "v0.1.0-main.1", () => {
+        throw new Error("HTTP 403");
+      }),
+    /403/,
+  );
+  assert.throws(
+    () => lookupTag("owner/repo", "v0.1.0-main.1", (endpoint) => (endpoint === ref ? {} : null)),
+    /Cannot resolve/,
+  );
+});
 test("main versions are unique per run and stable on reruns", () => {
   assert.equal(releaseMetadata("0.1.0", "12", sha).tag, "v0.1.0-main.12");
   assert.notEqual(releaseMetadata("0.1.0", "12", sha).tag, releaseMetadata("0.1.0", "13", sha).tag);

@@ -49,8 +49,14 @@ function lookupJSON(endpoint) {
 function lookupRelease(repository, tag) {
   return lookupJSON(`repos/${repository}/releases/tags/${tag}`);
 }
-function lookupTag(repository, tag) {
-  return lookupJSON(`repos/${repository}/commits/${tag}`)?.sha ?? null;
+export function lookupTag(repository, tag, lookup = lookupJSON) {
+  // The commits endpoint returns 422 for an unknown ref. The exact ref endpoint
+  // returns 404, distinguishing a new release from other API failures.
+  if (!lookup(`repos/${repository}/git/ref/tags/${tag}`)) return null;
+  // Resolve annotated tags to their source commit as well as lightweight tags.
+  const commit = lookup(`repos/${repository}/commits/${tag}`);
+  if (!commit?.sha) throw new Error("Cannot resolve existing release tag");
+  return commit.sha;
 }
 export async function publishRelease(
   metadata,
