@@ -27,13 +27,23 @@ packages/media-core/             Probing, planning, FFmpeg runner, validation, a
 
 Start with `packages/shared/src/index.ts`, then read `packages/media-core/src/planner.ts` and `runner.ts`, followed by the IPC boundaries in `apps/video-quick-editor-desktop/src/main/index.ts` and the renderer.
 
-## Setup
+## Install on macOS
 
-- macOS (the current packaging script produces an unsigned `.app` for the current arm64 architecture)
-- Node.js 22.12+ and pnpm 10.33+
-- Locally installed FFmpeg/ffprobe with the `libx264`, `libx265`, and `aac` encoders and the `drawtext`, `concat`, `scale`, `pad`, and `fps` filters
+The installer targets **Apple Silicon (arm64)**. Open `Video-Quick-Editor-<version>-mac-arm64.dmg`, drag **Video Quick Editor.app** to **Applications**, then launch it from Finder. The installed application includes Electron and needs neither Node.js nor pnpm. Replacing the app preserves its existing settings and encrypted model profiles; chat and editing projects are still session-only.
 
-The application checks `/opt/homebrew/bin`, `/usr/local/bin`, and `/usr/bin`, so launching from Finder does not depend on the terminal's PATH. You can also choose executables using the native file picker in Settings. The application does not install or download FFmpeg automatically.
+FFmpeg and ffprobe are external dependencies: they are **not bundled, downloaded or installed by the app**. Install both separately, or select existing executables in Settings. Required encoders are `libx264`, `libx265` and `aac`; required filters include drawtext, video scaling/concatenation/timing, and audio trimming/resampling/silence. The app reports exactly which capabilities are missing.
+
+Discovery checks `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, then PATH, without requiring an interactive shell. An explicitly configured path takes precedence; if it stops working, the app reports the failure instead of silently selecting another binary.
+
+A global bilingual banner reports detection, missing executables, permission/startup failures, timeout, or missing capabilities. **Choose executable**, **Open settings** and **Check again** restore availability without restarting. While unavailable, media import, proxy/frame generation, planning and exports are blocked in both UI and main-process APIs. Model configuration, connection tests, text chat and existing draft editing remain available. Every media operation rechecks the toolchain; recovery does not replay blocked actions. Queued jobs fail if tools are unavailable when execution begins; running jobs retain their original executable paths.
+
+Builds without a Developer ID use a local ad-hoc signature and are **not notarized**. This does not guarantee a warning-free launch after downloading. Public distribution signing, notarization and downloaded-app acceptance remain separate release work.
+
+## Development setup
+
+- macOS Apple Silicon
+- Node.js 22.12+ and the pinned pnpm 10.33.0
+- External FFmpeg/ffprobe for media processing and integration tests
 
 The interface defaults to English. Switch between English and 简体中文 in Settings. The selection is saved to Electron's `userData/settings.json` and persists across launches; older settings are automatically migrated to English.
 
@@ -48,9 +58,10 @@ pnpm lint
 pnpm test
 pnpm test:e2e
 pnpm package
+pnpm package:dir
 ```
 
-`pnpm package` produces `apps/video-quick-editor-desktop/release/mac-arm64/Video Quick Editor.app` (unsigned, not notarized, and for the current architecture only).
+`pnpm package` produces `apps/video-quick-editor-desktop/release/Video-Quick-Editor-0.1.0-mac-arm64.dmg` for the current version. `pnpm package:dir` produces only `apps/video-quick-editor-desktop/release/mac-arm64/Video Quick Editor.app`; `pnpm test:e2e` uses this directory packaging path without creating a DMG. The packaging hook repairs the local bundle signature before image creation; it does not provide Developer ID signing or notarization.
 
 `pnpm dev` first verifies the development dependency's `Electron.app`. If its bundle seal in the pnpm cache is damaged, the script regenerates a local ad-hoc signature for that development dependency on macOS before starting Vite. Valid signatures are left intact.
 
@@ -90,13 +101,17 @@ The default output directory comes from Electron's `app.getPath('downloads')`, w
 
 ## Agent editing
 
-Open the top-right side-chat button. Configure one OpenAI-compatible Chat Completions endpoint in Settings → Model, enter its model ID and API key, then save. The DeepSeek preset currently suggests `deepseek-v4-flash`; the ID remains editable. The connection test checks text, streaming and a harmless tool loop with no media tools. Saving alone does not mean the connection was verified.
+Open the top-right side-chat button. In **Settings → Models**, add named OpenAI-compatible Chat Completions profiles, each with its own Base URL, Model ID, context budget and API key. Up to 50 profiles are supported, including different models on the same endpoint. The first saved profile becomes active; later additions preserve your choice. Select the active profile directly in chat; the selection survives navigation and restart. A profile can be saved without a key, but cannot send until one is supplied. The DeepSeek preset currently suggests `deepseek-v4-flash`; the ID remains editable. The connection test uses the current form snapshot and checks text, streaming and a harmless tool loop with no media tools. It neither saves the form nor changes the active selection. Saving alone does not mean the connection was verified.
+
+Editing, deleting or changing the selected profile during a reply affects the next turn. The current turn retains its original endpoint, key, model and budget, including all tool steps. For a request that imports local paths, this snapshot is locked **before import**; missing configuration prevents that automatic import. Each turn displays its actual profile name and Model ID, which remain unchanged in history. Switching preserves messages, unsent text, draft and jobs. Deleting the active profile selects the first remaining entry, or no profile if the list is empty.
+
+Existing single-model settings migrate atomically without re-entering the key. A damaged or newer configuration file is preserved and reported, not replaced by an empty list. Independent encrypted credentials prevent one damaged key from removing other profiles; replace that profile's key to recover. After repairing an unreadable configuration file, restart to retry loading it.
 
 Example: “Keep A from 5–20 seconds and B's first 10 seconds, combine them, add ‘Travel notes’ and export.” If the selected font lacks any requested glyph, choose another font using the picker. For edits or previews alone, no export is requested. “Stop reply” stops subsequent Agent calls; cancel submitted exports separately from the Exports page.
 
 The main process owns the shared versioned draft. Manual changes and Agent tools use that draft; stale writes/plans fail, exports use snapshots, and repeated request IDs do not create duplicate jobs. Multiple requested exports enter a serial queue. Hiding chat or navigating preserves the session, draft input and running work; narrow windows use an overlay.
 
-Online models receive text instructions, display filenames and media parameters, never video/audio/preview images. Keys are encrypted with Electron `safeStorage` (macOS Keychain), stored in separate credential files, and never returned through settings IPC. Changed endpoints require an explicitly supplied key. HTTPS is required except loopback; redirects are refused. No plaintext fallback exists. Model changes apply next turn. Unknown models use a configurable conservative context budget; whole tool turns remain grouped, and over-budget requests fail rather than silently discard user constraints. DeepSeek thinking is disabled pending a verified reasoning/tool round trip.
+Online models receive text instructions, display filenames and media parameters, never video/audio/preview images. Keys are encrypted with Electron `safeStorage` (macOS Keychain), stored in separate credential files, and never returned through settings IPC. Changed endpoints, including a different path prefix on the same host, require a new key or explicit key deletion. Blank key fields on unchanged endpoints retain only that profile’s existing credential. HTTPS is required except loopback; redirects are refused. No plaintext fallback exists. Model changes apply next turn. Unknown models use a configurable conservative context budget; whole tool turns remain grouped, and over-budget requests fail rather than silently discard user constraints. DeepSeek thinking is disabled pending a verified reasoning/tool round trip.
 
 Real DeepSeek text/streaming/multistep acceptance requires a user-configured key and is not claimed by offline tests. Automatic tests use mock providers and temporary lavfi media.
 
@@ -127,6 +142,8 @@ The renderer enables `contextIsolation` and sandboxing and disables `nodeIntegra
 
 ## Testing
 
-Vitest covers shared contracts, output profiles, watermark glyphs, path parsing, revision checks, idempotent jobs, and model configuration. Media integration tests generate temporary lavfi videos and verify real FFmpeg output; unavailable FFmpeg prerequisites are reported as skips. Playwright launches the packaged Electron app with temporary userData and checks bilingual settings, trim playback, path import, multistep Agent tools, Markdown, and clearing chat. Tests do not use private videos; mock model endpoints do not substitute for real-provider acceptance.
+Vitest covers shared contracts, output profiles, watermark glyphs, path parsing, revision checks, idempotent jobs, and model configuration. Media integration tests generate temporary lavfi videos and verify real FFmpeg output; unavailable FFmpeg prerequisites are reported as skips. Playwright launches the packaged Electron app with temporary userData and checks bilingual settings, trim playback, path import, multistep Agent tools, Markdown, clearing chat, model switching during import/reply, and dependency blocking/recovery with a real watermarked MP4 export. Unit tests cover capability detection with temporary fake executables, stale checks, profile migration, independent credentials and atomic revision-checked writes. Tests do not use private videos; mock model endpoints do not substitute for real-provider acceptance.
 
-Signing, notarization, automatic updates, cross-platform installers, professional multitrack timelines, transitions, subtitles, image watermarks, network media, project persistence, and crash recovery are not included.
+Developer ID signing, notarization, automatic updates, cross-platform installers, professional multitrack timelines, transitions, subtitles, image watermarks, network media, project persistence, and crash recovery are not included.
+
+Implementation contracts: [Agent editing](specs/agent-video-editing.md), [desktop installation and dependencies](specs/desktop-installation-dependencies.md), [multi-model chat](specs/multi-model-chat.md).

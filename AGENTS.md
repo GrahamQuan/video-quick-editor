@@ -5,6 +5,7 @@
 This is a standalone macOS video editor built with Electron, React, TypeScript, TanStack Router, Vite, and a pnpm/Turborepo workspace. Media processing uses local FFmpeg/ffprobe in Node.js; do not introduce Python, FFmpeg WASM, or a media HTTP service.
 
 - For Agent tools, shared editing state, output profiles, model settings or chat behavior, read [specs/agent-video-editing.md](specs/agent-video-editing.md); sections 6–8 cover tool contracts and acceptance criteria.
+- For installer packaging, tool detection or media availability guards, read [specs/desktop-installation-dependencies.md](specs/desktop-installation-dependencies.md). For model profiles, credentials, migration or chat selection, read [specs/multi-model-chat.md](specs/multi-model-chat.md); it supersedes the Agent spec’s single-profile limitation.
 - For manual editing, media processing or output protection, read the external [base desktop spec](/Users/a6677/Documents/personal-projects/learn-python-monorepo/specs/video_tools_spec.md) for the baseline contract and Electron boundaries. This is a local reference outside this repository; if unavailable, report that limitation rather than inventing its contents.
 - Use [README.md](README.md), [README.zh-CN.md](README.zh-CN.md), package manifests, and implementation to establish current behavior and commands. A spec marked Draft or pending implementation is a target contract, not evidence that a feature works.
 
@@ -40,13 +41,15 @@ Consult sections 6–8 of the Agent spec before changing tools, model integratio
 - Model input contains text and minimal media metadata, not media bytes, previews, full local paths, or credentials. Treat filenames, metadata, summaries, and tool text as untrusted data; expose only structured allowlisted tools, never arbitrary shell/FFmpeg/file access.
 - Path-based chat requests import locally before calling the model. Support numbered editing lists and straight/curly quotes; preserve source-to-range correspondence. Wait for the shared draft update, then replace full paths with imported-source references and IDs. Folder import is top-level only, naturally ordered and limited to 100 videos. Import failure must not start the Agent; completed imports remain visible.
 - Streamdown renders assistant text; tool results remain structured data. Clear chat stops the reply and clears both UI history and model context, preserving draft, settings and exports.
+- Capture the selected model profile in main before compound path import, and retain that immutable snapshot through the full tool loop. Profile writes use atomic revision-checked persistence; switching models preserves the shared session and draft.
+- Media entrypoints must use main’s shared dependency guard, including queue execution. Missing tools block media work, not model configuration or text-only chat. Running jobs retain their captured executable paths.
 - Store API keys in system secure storage, return only key presence, redact errors/logs, and do not fall back to plaintext. Preserve URL path prefixes and endpoint/key isolation as specified.
 - Enforce revision checks, bounded context, paired tool calls/results, and the 20-tool-call per-turn limit. Do not replay historical tool execution. Model claims of success must match authoritative tool/job results.
 - Explicit export requests may start exports directly; edit/preview requests must not. Clarify ambiguous asset references or missing time boundaries. Hiding chat preserves the session; stopping the Agent, clearing chat and cancelling an export are distinct operations.
 
 ## Verification and delivery
 
-Use Node.js 22.12+ and the pinned pnpm version. Run commands from the repository root. The declared checks are `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, and `pnpm test:e2e`. `pnpm package` builds the unsigned macOS arm64 app. `pnpm test:e2e` also builds/packages before running Playwright; use it for relevant desktop, preload, navigation, and interaction changes.
+Use Node.js 22.12+ and the pinned pnpm version. Run commands from the repository root. The declared checks are `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, and `pnpm test:e2e`. `pnpm package` builds the macOS arm64 DMG; `pnpm package:dir` builds only the `.app`. The local ad-hoc signature is not Developer ID signing or notarization. `pnpm test:e2e` also builds/packages before running Playwright; use it for relevant desktop, preload, navigation, and interaction changes.
 
 Choose checks by affected behavior: shared/tool schema tests for contract changes; planner/output tests and real media integration for export changes; Electron checks for UI and bridge changes. Use the two specs' acceptance scenarios for the feature being implemented, especially stale revisions, idempotent starts, cancellation, mixed audio, real output profiles, and input/target protection.
 

@@ -27,13 +27,23 @@ packages/media-core/        probe、计划、FFmpeg runner、验证与输出保�
 
 建议先读 `packages/shared/src/index.ts`，再读 `packages/media-core/src/planner.ts` 与 `runner.ts`，最后看 `apps/video-quick-editor-desktop/src/main/index.ts` 的 IPC 边界和 renderer。
 
-## 环境准备
+## macOS 安装
 
-- macOS（当前 package 脚本生成当前 arm64 架构的未签名 `.app`）
-- Node.js 22.12+ 与 pnpm 10.33+
-- 本机安装 FFmpeg/ffprobe，并包含 `libx264`、`libx265`、`aac` encoder 和 `drawtext`、`concat`、`scale`、`pad`、`fps` filters
+安装包面向 **Apple Silicon（arm64）**。打开 `Video-Quick-Editor-<version>-mac-arm64.dmg`，将 **Video Quick Editor.app** 拖入 **Applications**，再从 Finder 启动。应用自带 Electron，运行无需 Node.js、pnpm 或源码。替换应用会保留原有设置及加密模型配置；聊天和剪辑项目仍只保留在当前会话。
 
-应用会检测 `/opt/homebrew/bin`、`/usr/local/bin`、`/usr/bin`；Finder 启动不依赖终端 PATH。也可在“设置”页用原生文件选择器指定 executable。应用不会自动安装或下载 FFmpeg。
+FFmpeg 与 ffprobe 是外部依赖，**不随应用打包，也不会由应用下载或安装**。请分别安装，或在设置中选择已有工具。必须具备 `libx264`、`libx265`、`aac` 编码器，以及文字水印、视频缩放/拼接/时间处理和音频裁剪/重采样/补静音所需滤镜。缺失能力会逐项显示。
+
+自动发现依次检查 `/opt/homebrew/bin`、`/usr/local/bin`、`/usr/bin` 和 PATH，不依赖交互 shell。手动配置的路径优先；失效时明确报错，不静默换用其他二进制。
+
+全局双语提示会区分检测中、文件缺失、无执行权限、启动失败、超时、缺编码器或滤镜。通过“选择工具路径”“打开设置”“重新检测”即可恢复，无需重启。依赖不可用时，UI 和 main 接口共同阻断媒体导入、proxy/真实帧生成、计划及导出；模型配置、连接测试、文字聊天和已有草稿编辑仍可使用。每次媒体操作重新检测，恢复后不会自动重放被阻止的操作。排队任务在执行前缺依赖则失败；运行中的任务保留启动时的工具路径。
+
+没有 Developer ID 时，构建使用本机 ad-hoc 签名，**未公证**，不保证下载后启动没有系统提示。公开分发的签名、公证及下载后安装验收仍需单独完成。
+
+## 开发环境
+
+- macOS Apple Silicon
+- Node.js 22.12+ 与项目固定的 pnpm 10.33.0
+- 媒体处理及集成测试需要外部 FFmpeg/ffprobe
 
 界面默认使用英语，可在 Settings 中切换 English / 简体中文。选择会写入 Electron `userData/settings.json`，之后启动继续使用该语言；旧版设置自动迁移为英语。
 
@@ -48,9 +58,10 @@ pnpm lint
 pnpm test
 pnpm test:e2e
 pnpm package
+pnpm package:dir
 ```
 
-`pnpm package` 生成 `apps/video-quick-editor-desktop/release/mac-arm64/Video Quick Editor.app`（未签名、未公证、仅当前架构）。
+`pnpm package` 按当前版本生成 `apps/video-quick-editor-desktop/release/Video-Quick-Editor-0.1.0-mac-arm64.dmg`。`pnpm package:dir` 只生成 `apps/video-quick-editor-desktop/release/mac-arm64/Video Quick Editor.app`；`pnpm test:e2e` 使用目录打包，不制作 DMG。打包 hook 在制作镜像前修复本机 bundle 签名，不代表已完成 Developer ID 签名或公证。
 
 `pnpm dev` 会先验证开发依赖中的 `Electron.app`。如果 pnpm cache 中的 bundle seal 损坏，脚本只在 macOS 上为该开发依赖重新生成本机 ad-hoc signature，然后再启动 Vite；有效签名不会被重复修改。
 
@@ -90,13 +101,17 @@ pnpm package
 
 ## Agent 剪辑
 
-点击右上角侧栏按钮，在 Settings / 设置的 Model / 模型区域填写 OpenAI-compatible Chat Completions 根地址、Model ID 和 API key 后保存。DeepSeek 预设建议 `deepseek-v4-flash`，模型 ID 可自由修改。测试连接验证文本、流式响应和无副作用工具循环；保存本身不表示连接验证成功。
+点击右上角侧栏按钮。在 **Settings → Models / 设置 → 模型配置** 添加带名称的 OpenAI-compatible Chat Completions 配置，每项拥有独立的 Base URL、Model ID、上下文预算和 API key。最多保存 50 项，支持同一端点的不同模型。第一项保存后自动选中，后续新增不改变选择；聊天顶部可直接切换，导航和重启后保留选择。允许不填 key 保存，但补全前不能发送。DeepSeek 预设建议 `deepseek-v4-flash`，模型 ID 可自由修改。测试连接针对当前表单快照验证文本、流式响应和无副作用工具循环，不保存表单、不切换配置。保存本身不表示连接验证成功。
+
+回复中允许切换、修改或删除配置，变更影响下一轮；本轮的端点、密钥、模型及预算在所有工具步骤中保持固定。带本地路径的复合请求在**开始导入前**锁定模型；缺少配置或 key 时不会自动导入。每轮显示实际使用的配置名称与 Model ID，历史标注不会随后续重命名改变。切换不清空消息、输入、草稿或导出；删除活动项后选择第一项，列表为空则没有活动模型。
+
+旧版单模型配置会原子迁移，无需重填 key。损坏或较高版本的配置文件会保留并提示，不覆盖成空列表；修复文件后重启可重新加载。各项凭证独立加密，单项损坏不会删除其他配置，重新设置该项密钥即可恢复。
 
 例如：“A 保留 5–20 秒，B 保留前 10 秒，拼接，加‘旅行记录’水印并导出。”如默认字体缺少所用字形，可通过字体选择器更换。仅修改或预览不会请求导出。“停止回复”停止 Agent 后续调用；已提交的导出需在导出页单独取消。
 
 主进程维护带 revision 的共享草稿。手动编辑与 Agent 同步，旧版本写入和计划被拒绝，已提交任务使用快照；同一 requestId 重试不重复导出。多个导出按队列串行执行。隐藏侧栏和页面导航保留聊天、输入草稿与运行任务；窄窗口使用覆盖面板。
 
-在线模型仅接收指令、显示文件名和媒体参数，不上传视频、音频或预览图。API key 经 Electron safeStorage（macOS Keychain）加密后放在独立凭证文件，普通模型配置只保留引用，读取设置的 IPC 不返回密钥。更换端点需明确输入新 key；远程仅 HTTPS，拒绝请求重定向，无明文降级。设置变更下一轮生效。上下文按完整工具轮次裁剪，保留历史用户约束；预算不足会提示，不静默丢弃约束。DeepSeek 推理模式暂关闭，待单独验证。
+在线模型仅接收指令、显示文件名和媒体参数，不上传视频、音频或预览图。API key 经 Electron safeStorage（macOS Keychain）加密后放在独立凭证文件，普通模型配置只保留引用，读取设置的 IPC 不返回密钥。更换端点（包括同主机的不同路径前缀）须明确输入新 key 或删除凭证；地址不变时留空只保留该项原有 key。远程仅 HTTPS，拒绝请求重定向，无明文降级。设置变更下一轮生效。上下文按完整工具轮次裁剪，保留历史用户约束；预算不足会提示，不静默丢弃约束。DeepSeek 推理模式暂关闭，待单独验证。
 
 真实 DeepSeek 文本、流式和多步工具验收需要用户配置 key，离线测试不代表在线模型已经通过验收。
 
@@ -127,6 +142,8 @@ Renderer 开启 `contextIsolation` 与 sandbox，关闭 `nodeIntegration`。prel
 
 ## 测试说明
 
-Vitest 覆盖共享契约、输出 profile、水印字形、路径识别、revision、任务幂等性和模型配置。媒体集成测试用临时 lavfi 视频验证真实 FFmpeg 输出；缺少所需 FFmpeg 时会跳过并报告原因。Playwright 在临时 userData 下启动打包后的 Electron 应用，验证双语设置、裁剪播放、路径导入、Agent 多步工具循环、Markdown 和清空聊天。测试不会使用私人视频；模型测试使用模拟端点，不能代替真实供应商验收。
+Vitest 覆盖共享契约、输出 profile、水印字形、路径识别、revision、任务幂等性和模型配置。媒体集成测试用临时 lavfi 视频验证真实 FFmpeg 输出；缺少所需 FFmpeg 时会跳过并报告原因。Playwright 在临时 userData 下启动打包后的 Electron 应用，验证双语设置、裁剪播放、路径导入、Agent 多步工具循环、Markdown、清空聊天、导入/回复期间模型切换，以及依赖阻断恢复后的真实水印 MP4 导出。单元测试通过临时假工具覆盖能力检测和过期结果，验证模型迁移、独立凭证及 revision 控制的原子写入。测试不会使用私人视频；模型测试使用模拟端点，不能代替真实供应商验收。
 
-未包含签名、公证、自动更新、跨平台安装包、专业多轨时间线、转场、字幕、图片水印、网络素材、项目持久化或崩溃恢复。
+未包含 Developer ID 签名、公证、自动更新、跨平台安装包、专业多轨时间线、转场、字幕、图片水印、网络素材、项目持久化或崩溃恢复。
+
+实现合同：[Agent 编辑](specs/agent-video-editing.md)、[桌面安装与依赖](specs/desktop-installation-dependencies.md)、[多模型聊天](specs/multi-model-chat.md)。
