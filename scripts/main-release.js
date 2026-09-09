@@ -46,8 +46,17 @@ function lookupJSON(endpoint) {
   if (result.stderr.includes("HTTP 404")) return null;
   throw new Error(`Cannot inspect release: ${result.stderr}`);
 }
-function lookupRelease(repository, tag) {
-  return lookupJSON(`repos/${repository}/releases/tags/${tag}`);
+export function lookupRelease(repository, tag, lookup = lookupJSON) {
+  const published = lookup(`repos/${repository}/releases/tags/${tag}`);
+  if (published) return published;
+  // GitHub's by-tag endpoint excludes drafts, even for an authorized token.
+  for (let page = 1; ; page++) {
+    const releases = lookup(`repos/${repository}/releases?per_page=100&page=${page}`);
+    if (!Array.isArray(releases)) throw new Error("Cannot list release drafts");
+    const draft = releases.find((release) => release.tag_name === tag);
+    if (draft) return draft;
+    if (releases.length < 100) return null;
+  }
 }
 export function lookupTag(repository, tag, lookup = lookupJSON) {
   // The commits endpoint returns 422 for an unknown ref. The exact ref endpoint

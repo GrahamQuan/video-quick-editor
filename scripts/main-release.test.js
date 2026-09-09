@@ -4,9 +4,41 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { releaseMetadata, publishRelease, verifyAssets, lookupTag } from "./main-release.js";
+import {
+  releaseMetadata,
+  publishRelease,
+  verifyAssets,
+  lookupTag,
+  lookupRelease,
+} from "./main-release.js";
 
 const sha = "a".repeat(40);
+test("release lookup finds uploaded drafts through the paginated list API", () => {
+  const draft = { tag_name: "v0.1.0-main.6", draft: true, target_commitish: sha };
+  const calls = [];
+  assert.equal(
+    lookupRelease("owner/repo", draft.tag_name, (endpoint) => {
+      calls.push(endpoint);
+      if (endpoint.includes("/tags/")) return null;
+      if (endpoint.endsWith("page=1"))
+        return Array.from({ length: 100 }, () => ({ tag_name: "other" }));
+      return [draft];
+    }),
+    draft,
+  );
+  assert.equal(calls.length, 3);
+  assert.equal(
+    lookupRelease("owner/repo", draft.tag_name, (endpoint) =>
+      endpoint.includes("/tags/") ? null : [],
+    ),
+    null,
+  );
+  assert.throws(() => lookupRelease("owner/repo", draft.tag_name, () => null), /Cannot list/);
+  assert.equal(
+    lookupRelease("owner/repo", draft.tag_name, () => ({ ...draft, draft: false })).draft,
+    false,
+  );
+});
 test("tag lookup handles new tags and resolves existing tags without suppressing API failures", () => {
   const ref = "repos/owner/repo/git/ref/tags/v0.1.0-main.1";
   const commit = "repos/owner/repo/commits/v0.1.0-main.1";
