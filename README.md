@@ -39,6 +39,16 @@ A global bilingual banner reports detection, missing executables, permission/sta
 
 Builds without a Developer ID use a local ad-hoc signature and are **not notarized**. This does not guarantee a warning-free launch after downloading. Public distribution signing, notarization and downloaded-app acceptance remain separate release work.
 
+## Automated main releases
+
+Download stable versions and development builds from [GitHub Releases](https://github.com/GrahamQuan/video-quick-editor/releases).
+
+Every push to `main` triggers **Main prerelease**; it can also be run manually from Actions on `main`. The workflow uses a macOS arm64 runner, Node.js 24 and the pinned pnpm version, runs typecheck, lint, unit/media and packaged Electron tests, then builds a DMG. FFmpeg is installed only in the disposable CI runner for testing, never in the installer.
+
+Each run publishes a separate prerelease such as `v0.1.0-main.12`, where `0.1.0` is the desktop package version and `12` is the workflow run number. CI changes the app version only in its checkout; it does not commit version bumps or overwrite the existing stable release. The DMG filename and app version match the release. The build job has read-only repository access; only the publishing job receives `contents: write` through `GITHUB_TOKEN`, with no additional secrets required.
+
+Releases remain drafts until both the DMG and `SHA256SUMS.txt` have uploaded and GitHub reports matching sizes and SHA-256 digests. A failed upload can resume from the draft. A published release is left untouched on a retry; different content or a different source commit causes an error instead of replacement. CI artifacts are retained for 14 days. These automated packages remain ad-hoc signed and unnotarized; this workflow does not add automatic updates to the app.
+
 ## Development setup
 
 - macOS Apple Silicon

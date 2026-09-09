@@ -39,6 +39,16 @@ FFmpeg 与 ffprobe 是外部依赖，**不随应用打包，也不会由应用�
 
 没有 Developer ID 时，构建使用本机 ad-hoc 签名，**未公证**，不保证下载后启动没有系统提示。公开分发的签名、公证及下载后安装验收仍需单独完成。
 
+## main 自动发布
+
+正式版和开发构建均可在 [GitHub Releases](https://github.com/GrahamQuan/video-quick-editor/releases) 下载。
+
+每次推送到 `main` 会触发 **Main prerelease**，也可在 Actions 中选择 `main` 手动运行。流程使用 macOS arm64 runner、Node.js 24 和项目固定的 pnpm，依次执行类型检查、lint、单元/媒体测试与打包后的 Electron 测试，再构建 DMG。FFmpeg 只安装在临时 CI runner 中用于测试，不进入安装包。
+
+每轮发布独立预发布版本，例如 `v0.1.0-main.12`：`0.1.0` 来自桌面 package 版本，`12` 是工作流运行编号。CI 只在自身 checkout 中修改应用版本，不提交版本号变更，也不覆盖已有正式版；DMG 文件名与应用版本保持一致。构建任务只有仓库读取权限，发布任务通过 `GITHUB_TOKEN` 获得 `contents: write`，无需额外配置密钥。
+
+DMG 和 `SHA256SUMS.txt` 均上传完成，且 GitHub 返回的大小和 SHA-256 与本地产物一致后，草稿才公开。上传失败可从草稿恢复；重试时已公开版本保持不变，内容或源 commit 不一致则报错，不覆盖附件。CI 构建产物保留 14 天。自动构建仍为 ad-hoc 签名、未公证，不包含应用内自动更新。
+
 ## 开发环境
 
 - macOS Apple Silicon
