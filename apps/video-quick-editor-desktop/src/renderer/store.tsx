@@ -1,3 +1,4 @@
+import type { DependencyState } from "@video-quick-editor/shared";
 import {
   createContext,
   useCallback,
@@ -32,6 +33,7 @@ interface EditorState {
   normalize: ExportRequest["normalize"];
   jobs: ExportJob[];
   settings: Settings | null;
+  dependencies: DependencyState;
   busy: "probing" | null;
   error: string | null;
 }
@@ -86,6 +88,7 @@ export function StoreProvider({ children }: PropsWithChildren): React.JSX.Elemen
     normalize: { width: null, height: null, fps: null },
     jobs: [],
     settings: null,
+    dependencies: { status: "checking", generation: 0, tools: [] },
     busy: null,
     error: null,
   });
@@ -124,6 +127,12 @@ export function StoreProvider({ children }: PropsWithChildren): React.JSX.Elemen
     [receive],
   );
   useEffect(() => {
+    const updateDependencies = (dependencies: DependencyState) =>
+      setState((s) =>
+        dependencies.generation < s.dependencies.generation ? s : { ...s, dependencies },
+      );
+    void window.videoQuickEditor.getDependencies().then(updateDependencies);
+    const unDependencies = window.videoQuickEditor.subscribeDependencies(updateDependencies);
     const unDraft = window.videoQuickEditor.subscribeDraft(receive);
     const unJobs = window.videoQuickEditor.subscribeJobs((jobs) =>
       setState((s) => ({ ...s, jobs })),
@@ -143,6 +152,7 @@ export function StoreProvider({ children }: PropsWithChildren): React.JSX.Elemen
       })
       .catch((e: unknown) => setState((s) => ({ ...s, error: message(e) })));
     return () => {
+      unDependencies();
       unDraft();
       unJobs();
     };

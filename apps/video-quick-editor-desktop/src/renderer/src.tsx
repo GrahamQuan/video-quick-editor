@@ -1,6 +1,7 @@
 import { TrimRange } from "./trim-range.js";
 import { AgentChat } from "./agent.js";
 import { ModelSettings } from "./model-profiles.js";
+import { DependencyBanner } from "./dependency-banner.js";
 import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -125,6 +126,7 @@ function Shell(): React.JSX.Element {
         <AgentChat />
       </header>
       <main className="editor-main min-h-[calc(100vh-72px)]">
+        <DependencyBanner />
         <Outlet />
       </main>
     </div>
@@ -247,6 +249,7 @@ function EditorPage(): React.JSX.Element {
           </div>
           <button
             className="h-[34px] w-[34px] rounded-[9px] border border-white/[0.09] bg-white/[0.03] text-[19px] text-white"
+            disabled={store.dependencies.status !== "ready"}
             onClick={() => void store.importWithDialog()}
           >
             ＋
@@ -280,11 +283,13 @@ function EditorPage(): React.JSX.Element {
         </div>
         <button
           className="flex h-[105px] w-full flex-col items-center justify-center gap-[5px] rounded-[13px] border border-dashed border-primary-border bg-secondary text-[#ccd8dd] [&>small]:text-[10px] [&>small]:text-[#71808c] [&>span]:text-xl [&>span]:text-primary [&>strong]:text-[13px]"
+          disabled={store.dependencies.status !== "ready"}
           onClick={() => void store.importWithDialog()}
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => {
             event.preventDefault();
-            void store.importDropped([...event.dataTransfer.files]);
+            if (store.dependencies.status === "ready")
+              void store.importDropped([...event.dataTransfer.files]);
           }}
         >
           <span>＋</span>
@@ -397,6 +402,7 @@ function EditorPage(): React.JSX.Element {
         {store.clips.length > 0 && (
           <button
             className="mt-[10px] w-full rounded-[9px] border border-dashed border-primary-border bg-secondary p-[9px] text-[10px] text-primary"
+            disabled={store.dependencies.status !== "ready"}
             onClick={() => void store.importWithDialog()}
           >
             {copy.addNextClip}
@@ -485,7 +491,9 @@ function EditorPage(): React.JSX.Element {
         {playerError && (
           <div className={warningClass}>
             {copy.playerUnsupported}
-            <button onClick={() => void proxy()}>{copy.generateProxy}</button>
+            <button disabled={store.dependencies.status !== "ready"} onClick={() => void proxy()}>
+              {copy.generateProxy}
+            </button>
           </div>
         )}
         {selected && asset && (
@@ -503,7 +511,7 @@ function EditorPage(): React.JSX.Element {
           <span>{copy.overlayNote}</span>
           <button
             className={secondaryButtonClass}
-            disabled={!asset || action !== null}
+            disabled={!asset || action !== null || store.dependencies.status !== "ready"}
             onClick={() => void frame()}
           >
             {copy.previewExport}
@@ -777,7 +785,7 @@ function EditorPage(): React.JSX.Element {
             <button
               className={primaryButtonClass}
               disabled={
-                !store.clips.length || action !== null || !store.settings?.toolStatus.available
+                !store.clips.length || action !== null || store.dependencies.status !== "ready"
               }
               onClick={() => void exportVideo()}
             >
@@ -1032,13 +1040,13 @@ function ExportsPage(): React.JSX.Element {
 }
 
 function SettingsPage(): React.JSX.Element {
-  const { settings, setSettings, setError } = useStore();
+  const { settings, dependencies, setSettings, setError } = useStore();
   const language = settings?.language ?? "en";
   const copy = copyFor(language);
   const [draft, setDraft] = useState({ ffmpegPath: "", ffprobePath: "" });
   useEffect(() => {
     if (settings) setDraft({ ffmpegPath: settings.ffmpegPath, ffprobePath: settings.ffprobePath });
-  }, [settings]);
+  }, [settings?.ffmpegPath, settings?.ffprobePath]);
   async function pick(kind: "ffmpeg" | "ffprobe"): Promise<void> {
     const path = await window.videoQuickEditor.chooseTool(kind);
     if (path) setDraft((current) => ({ ...current, [`${kind}Path`]: path }));
@@ -1085,14 +1093,14 @@ function SettingsPage(): React.JSX.Element {
       >
         <div
           className={`flex flex-col gap-[5px] rounded-[10px] p-[14px] ${
-            settings?.toolStatus.available
+            dependencies.status === "ready"
               ? "bg-secondary text-primary"
               : "bg-[#382321] text-[#ff9f98]"
           }`}
         >
-          <b>{settings?.toolStatus.available ? copy.toolsAvailable : copy.toolsIncomplete}</b>
+          <b>{dependencies.status === "ready" ? copy.toolsAvailable : copy.toolsIncomplete}</b>
           <span className="text-[10px] text-[#84918f]">
-            {settings?.toolStatus.missing.join(" · ") || copy.codecsReady}
+            {dependencies.status === "ready" ? copy.codecsReady : copy.dependencyHint}
           </span>
         </div>
         <label>
@@ -1131,8 +1139,14 @@ function SettingsPage(): React.JSX.Element {
           {copy.saveAndCheck}
         </button>
         <div className="flex flex-col gap-[7px] border-t border-white/[0.06] pt-4 [&_code]:text-[9px] [&_code]:text-[#71808c]">
-          <code>{settings?.toolStatus.ffmpegVersion ?? `FFmpeg ${copy.notDetected}`}</code>
-          <code>{settings?.toolStatus.ffprobeVersion ?? `ffprobe ${copy.notDetected}`}</code>
+          <code>
+            {dependencies.tools.find((t) => t.tool === "ffmpeg")?.version ??
+              `FFmpeg ${copy.notDetected}`}
+          </code>
+          <code>
+            {dependencies.tools.find((t) => t.tool === "ffprobe")?.version ??
+              `ffprobe ${copy.notDetected}`}
+          </code>
         </div>
       </section>
       <section

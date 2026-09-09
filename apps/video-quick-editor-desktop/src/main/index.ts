@@ -1,3 +1,4 @@
+import { Dependencies, type ToolPaths } from "./dependencies.js";
 import { resolveImportPaths } from "./import-paths.js";
 import { findDefaultFont } from "./fonts.js";
 import { EditorService } from "./editor-service.js";
@@ -82,12 +83,9 @@ let persisted: PersistedSettings = {
   language: "en",
   fonts: {},
 };
-let toolStatus: Settings["toolStatus"] = {
-  available: false,
-  ffmpegVersion: null,
-  ffprobeVersion: null,
-  missing: ["尚未检测"],
-};
+const dependencies = new Dependencies((state) =>
+  mainWindow?.webContents.send("dependencies:state", state),
+);
 
 function settingsPath(): string {
   return join(app.getPath("userData"), "settings.json");
@@ -122,8 +120,7 @@ async function loadSettings(): Promise<void> {
     ...editor.snapshot().request,
     watermark: { ...editor.snapshot().request.watermark, fontId: persisted.defaultFontId },
   });
-  persisted.ffmpegPath ||= await discoverTool("ffmpeg");
-  persisted.ffprobePath ||= await discoverTool("ffprobe");
+  dependencies.configure({ ffmpegPath: persisted.ffmpegPath, ffprobePath: persisted.ffprobePath });
 }
 
 async function saveSettings(): Promise<void> {
@@ -135,51 +132,15 @@ async function saveSettings(): Promise<void> {
   });
 }
 
-async function discoverTool(name: "ffmpeg" | "ffprobe"): Promise<string> {
-  const candidates = [`/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`, `/usr/bin/${name}`];
-  for (const candidate of candidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      /* keep looking */
-    }
-  }
-  return name;
-}
-
 async function checkTools(): Promise<Settings["toolStatus"]> {
-  const missing: string[] = [];
-  let ffmpegVersion: string | null = null;
-  let ffprobeVersion: string | null = null;
-  try {
-    const [version, encoders, filters] = await Promise.all([
-      runProcess(persisted.ffmpegPath, ["-version"]),
-      runProcess(persisted.ffmpegPath, ["-hide_banner", "-encoders"]),
-      runProcess(persisted.ffmpegPath, ["-hide_banner", "-filters"]),
-    ]);
-    ffmpegVersion = version.stdout.split("\n")[0] ?? null;
-    for (const encoder of ["libx264", "libx265", "aac"])
-      if (!encoders.stdout.includes(encoder)) missing.push(`encoder:${encoder}`);
-    for (const filter of ["drawtext", "concat", "scale", "pad", "fps"])
-      if (!filters.stdout.includes(filter)) missing.push(`filter:${filter}`);
-  } catch (error) {
-    missing.push(`ffmpeg: ${message(error)}`);
-  }
-  try {
-    ffprobeVersion =
-      (await runProcess(persisted.ffprobePath, ["-version"])).stdout.split("\n")[0] ?? null;
-  } catch (error) {
-    missing.push(`ffprobe: ${message(error)}`);
-  }
-  toolStatus = { available: missing.length === 0, ffmpegVersion, ffprobeVersion, missing };
-  return toolStatus;
+  await dependencies.check();
+  return dependencies.legacy();
 }
 
 function currentSettings(): Settings {
   return settingsSchema.parse({
     ...persisted,
-    toolStatus,
+    toolStatus: dependencies.legacy(),
     defaultFontName:
       persisted.defaultFontId && fonts.get(persisted.defaultFontId)
         ? basename(fonts.get(persisted.defaultFontId)!)
@@ -207,14 +168,13 @@ function handle(
 }
 
 async function importPaths(raw: unknown): Promise<ProbedAsset[]> {
-  if (!toolStatus.available) await checkTools();
-  if (!toolStatus.available) throw new Error(`FFmpeg 工具不可用：${toolStatus.missing.join("；")}`);
+  const tools = await dependencies.requireReady();
   const paths = await resolveImportPaths(raw);
   const result: ProbedAsset[] = [];
   for (const path of paths) {
     if (resolve(path) !== path) throw new Error("只接受本地绝对路径");
     const id = randomUUID();
-    const asset = await probeAsset(persisted.ffprobePath, path, id);
+    const asset = await probeAsset(tools.ffprobePath, path, id);
     result.push(asset);
   }
   for (const asset of result) {
@@ -274,7 +234,7 @@ async function resolveExport(request: ExportRequest): Promise<{
       replaceAuthorized: false,
     };
   }
-  if (!toolStatus.available) throw new Error("FFmpeg 工具不可用");
+
   for (const clip of request.clips) {
     const watermark = clip.watermark ?? request.watermark;
     if (!watermark.enabled) continue;
@@ -309,7 +269,8 @@ async function resolveExport(request: ExportRequest): Promise<{
 async function makePlan(
   request: ExportRequest,
   realRun: boolean,
-): Promise<{ plan: ExecutionPlan; tempDirectory: string }> {
+): Promise<{ plan: ExecutionPlan; tempDirectory: string; tools: ToolPaths }> {
+  const tools = await dependencies.requireReady();
   const resolvedExport = await resolveExport(request);
   const outputDirectory = dirname(resolvedExport.output.path);
   if (realRun) await mkdir(outputDirectory, { recursive: true });
@@ -333,7 +294,7 @@ async function makePlan(
   try {
     const plan = createExecutionPlan({
       watermarkResources,
-      ffmpegPath: persisted.ffmpegPath,
+      ffmpegPath: tools.ffmpegPath,
       clips: resolvedExport.clips,
       request,
       fontPath: resolvedExport.fontPath,
@@ -342,7 +303,7 @@ async function makePlan(
       tempOutputPath,
       finalOutputPath: resolvedExport.output.path,
     });
-    return { plan, tempDirectory };
+    return { plan, tempDirectory, tools };
   } catch (error) {
     if (realRun) await rm(tempDirectory, { recursive: true, force: true });
     throw error;
@@ -368,8 +329,9 @@ async function createProxy(assetId: string): Promise<string> {
   try {
     await access(path, constants.R_OK);
   } catch {
+    const tools = await dependencies.requireReady();
     await mkdir(directory, { recursive: true });
-    await runProcess(persisted.ffmpegPath, [
+    await runProcess(tools.ffmpegPath, [
       "-nostdin",
       "-y",
       "-i",
@@ -395,6 +357,7 @@ function escapeFilterPath(path: string): string {
 }
 
 async function previewFrame(raw: unknown): Promise<string> {
+  const tools = await dependencies.requireReady();
   const draft = editor.snapshot().request;
   const input = z
     .object({
@@ -448,7 +411,7 @@ async function previewFrame(raw: unknown): Promise<string> {
   }
   if (!input.watermark.enabled) args.push("-vf", baseFilter);
   args.push("-frames:v", "1", path);
-  await runProcess(persisted.ffmpegPath, args);
+  await runProcess(tools.ffmpegPath, args);
   mediaFiles.set(`frame/${id}`, path);
   return `media://frame/${id}`;
 }
@@ -456,6 +419,7 @@ async function previewFrame(raw: unknown): Promise<string> {
 let exportQueue: Promise<void> = Promise.resolve();
 async function startExport(raw: unknown): Promise<ExportJob> {
   const request = exportRequestSchema.parse(raw);
+  await dependencies.requireReady();
   if (
     request.output &&
     jobs.some(
@@ -489,12 +453,12 @@ async function startExport(raw: unknown): Promise<ExportJob> {
   const run = async () => {
     try {
       controller.signal.throwIfAborted();
-      const { plan, tempDirectory } = await makePlan(request, true);
+      const { plan, tempDirectory, tools } = await makePlan(request, true);
       updateJob(job, { state: "preparing", phase: `准备${taskName}临时资源`, progress: 0 });
       const selection = request.output ? outputSelections.get(request.output.token) : null;
       await executePlan({
-        ffmpegPath: persisted.ffmpegPath,
-        ffprobePath: persisted.ffprobePath,
+        ffmpegPath: tools.ffmpegPath,
+        ffprobePath: tools.ffprobePath,
         plan,
         tempDirectory,
         replaceAuthorized: selection?.replaceAuthorized ?? false,
@@ -603,7 +567,9 @@ function installIpc(): void {
   );
   handle("agent:stop", () => agent.stop());
   handle("agent:clear", async () => await agent.clear());
+  handle("dependencies:get", () => dependencies.snapshot());
   handle("assets:choose", async () => {
+    await dependencies.requireReady();
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ["openFile", "multiSelections"],
       filters: [{ name: "视频", extensions: ["mp4", "mov", "mkv"] }],
@@ -669,7 +635,13 @@ function installIpc(): void {
     if (update.ffprobePath !== undefined) persisted.ffprobePath = update.ffprobePath;
     if (update.language !== undefined) persisted.language = update.language;
     await saveSettings();
-    if (toolPathChanged) await checkTools();
+    if (toolPathChanged) {
+      dependencies.configure({
+        ffmpegPath: persisted.ffmpegPath,
+        ffprobePath: persisted.ffprobePath,
+      });
+      await checkTools();
+    }
     return currentSettings();
   });
   handle("settings:check-tools", async () => await checkTools());
@@ -772,7 +744,6 @@ void app.whenReady().then(async () => {
   agent = new AgentRunner(editor, models, (session) =>
     mainWindow?.webContents.send("agent:session", session),
   );
-  await checkTools();
   protocol.handle("media", async (request) => {
     const url = new URL(request.url);
     const path = mediaFiles.get(`${url.hostname}${url.pathname}`);
@@ -781,6 +752,7 @@ void app.whenReady().then(async () => {
   });
   installIpc();
   await createWindow();
+  void checkTools();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();
   });

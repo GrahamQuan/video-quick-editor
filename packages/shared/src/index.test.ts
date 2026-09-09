@@ -72,7 +72,7 @@ it("legacy requests retain source and tools reject arbitrary paths", () => {
   ).toBe(false);
 });
 
-import { saveModelProfileSchema, modelProfilesSchema } from "./index.js";
+import { saveModelProfileSchema, modelProfilesSchema, dependencyStateSchema } from "./index.js";
 it("validates model collection limits and strips credential fields from public views", () => {
   const input = {
     expectedRevision: 0,
@@ -102,5 +102,8 @@ it("validates model collection limits and strips credential fields from public v
   );
   expect(
     modelProfilesSchema.safeParse({ ...collection, profiles: Array(51).fill(profile) }).success,
+  ).toBe(false);
+  expect(
+    dependencyStateSchema.safeParse({ status: "ready", generation: -1, tools: [] }).success,
   ).toBe(false);
 });

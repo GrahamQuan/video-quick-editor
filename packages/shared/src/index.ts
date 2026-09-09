@@ -109,18 +109,40 @@ export const exportRequestSchema = z.object({
     fps: z.string().nullable(),
   }),
 });
+export const dependencyFailureSchema = z.enum([
+  "not-found",
+  "not-executable",
+  "start-failed",
+  "timeout",
+  "missing-encoders",
+  "missing-filters",
+]);
+export const dependencyToolSchema = z.object({
+  tool: z.enum(["ffmpeg", "ffprobe"]),
+  version: z.string().nullable(),
+  failures: z.array(dependencyFailureSchema),
+  missingEncoders: z.array(z.string()),
+  missingFilters: z.array(z.string()),
+});
+export const dependencyStateSchema = z.object({
+  status: z.enum(["checking", "ready", "unavailable"]),
+  generation: z.number().int().nonnegative(),
+  tools: z.array(dependencyToolSchema),
+});
+export type DependencyState = z.infer<typeof dependencyStateSchema>;
+export const toolStatusSchema = z.object({
+  available: z.boolean(),
+  ffmpegVersion: z.string().nullable(),
+  ffprobeVersion: z.string().nullable(),
+  missing: z.array(z.string()),
+});
 export const settingsSchema = z.object({
   ffmpegPath: z.string(),
   ffprobePath: z.string(),
   defaultFontId: z.string().uuid().nullable(),
   defaultFontName: z.string().nullable().default(null),
   language: languageSchema.default("en"),
-  toolStatus: z.object({
-    available: z.boolean(),
-    ffmpegVersion: z.string().nullable(),
-    ffprobeVersion: z.string().nullable(),
-    missing: z.array(z.string()),
-  }),
+  toolStatus: toolStatusSchema,
 });
 export const exportPlanViewSchema = z.object({
   mode: exportModeSchema,
@@ -156,6 +178,8 @@ export type Language = z.infer<typeof languageSchema>;
 export type OutputSelection = z.infer<typeof outputSelectionSchema>;
 
 export interface VideoQuickEditorApi extends AgentApi {
+  getDependencies(): Promise<DependencyState>;
+  subscribeDependencies(listener: (state: DependencyState) => void): () => void;
   chooseAssets(): Promise<AssetView[]>;
   importLocalPaths(paths: string[]): Promise<AssetView[]>;
   importDroppedFiles(files: File[]): Promise<AssetView[]>;

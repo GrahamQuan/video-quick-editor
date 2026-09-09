@@ -379,6 +379,26 @@ input {
   margin-top: 8px;
 }
 
+.dependency-banner {
+  margin: 12px 20px;
+  padding: 14px;
+  border: 1px solid #795e32;
+  border-radius: 10px;
+  background: #251e16;
+  color: #f1d0a1;
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.dependency-banner > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.dependency-banner button,
+.dependency-banner a {
+  color: var(--color-primary);
+}
 .chat-model-selection {
   padding: 10px 16px;
   border-bottom: 1px solid var(--color-border);

@@ -21,7 +21,7 @@ test("Electron app、Video.js、双语设置持久化与安全 preload 可用", 
     await expect(page.getByText("⧉ Combine")).toBeVisible();
     await page.getByRole("link", { name: "Exports" }).click();
     await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
-    await page.getByRole("link", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings", exact: true }).click();
     await expect(page.getByRole("heading", { name: "FFmpeg settings" })).toBeVisible();
     await page.getByLabel("Language").selectOption("zh-CN");
     await expect(page.getByRole("heading", { name: "FFmpeg 设置" })).toBeVisible();
@@ -40,8 +40,8 @@ test("Electron app、Video.js、双语设置持久化与安全 preload 可用", 
   });
   try {
     const page = await application.firstWindow();
-    await expect(page.getByRole("link", { name: "设置" })).toBeVisible();
-    await page.getByRole("link", { name: "设置" }).click();
+    await expect(page.getByRole("link", { name: "设置", exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "设置", exact: true }).click();
     await expect(page.getByLabel("语言")).toHaveValue("zh-CN");
   } finally {
     await application.close();
@@ -303,6 +303,12 @@ test("mock model tool loop updates the same draft as manual editing", async ({
     ).toHaveLength(3);
     expect(modelRequests[0]).toContain("Local import already completed");
     expect(modelRequests.join("\n")).not.toContain(dirname(fixture));
+    await expect
+      .poll(
+        async () => (await page.evaluate(() => window.videoQuickEditor.getAgentSession())).running,
+      )
+      .toBe(false);
+    await expect(page.getByRole("button", { name: "Stop reply", exact: true })).toHaveCount(0);
     const messages = page.locator(".chat-message");
     await expect(messages.last()).toContainText("Trim updated. No export started.");
     await expect(messages.last().getByRole("heading", { name: "Edit complete" })).toBeVisible();
@@ -313,7 +319,10 @@ test("mock model tool loop updates the same draft as manual editing", async ({
       messages.last().getByRole("button", { name: "Copy code", exact: true }),
     ).toBeVisible();
     await expect(messages.last().locator("img, script, a[href]")).toHaveCount(0);
-    await messages.last().locator("pre").scrollIntoViewIfNeeded();
+    await messages
+      .last()
+      .locator("pre")
+      .evaluate((element) => element.scrollIntoView());
     await page.screenshot({ path: testInfo.outputPath("streamdown-chat.png") });
     await expect(page.locator(".chat-message.tool details")).toHaveCount(2);
     expect(await page.locator(".chat-message.tool details[open]").count()).toBe(0);

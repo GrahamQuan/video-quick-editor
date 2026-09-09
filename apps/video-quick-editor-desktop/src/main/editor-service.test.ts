@@ -106,3 +106,58 @@ it("watermark tools only change the selected clip and timeline edits preserve it
   ).toMatchObject({ ok: true });
   expect(service.draft.request.clips[1]?.watermark?.text).toBe("First only");
 });
+
+it("returns repairable dependency errors from media tools while context and draft editing remain available", async () => {
+  let ready = true;
+  const unavailable = async () => {
+    if (!ready) throw new Error("TOOLS_UNAVAILABLE: ffprobe not-found; check Settings");
+  };
+  const service = new EditorService({
+    assets: () => [asset],
+    fontAvailable: () => false,
+    output: () => null,
+    plan: async () => {
+      await unavailable();
+      return {
+        expectedDurationUs: 1000000,
+        outputPath: "/private/output.mp4",
+        changes: [],
+        warnings: [],
+      };
+    },
+    start: async () => {
+      await unavailable();
+      throw new Error("No job should be created");
+    },
+    jobs: () => [],
+    cancel: () => {},
+    preview: async () => {
+      await unavailable();
+      return "";
+    },
+    emit: () => {},
+  });
+  const clip = { id: randomUUID(), assetId: asset.id, startUs: 0, endUs: 1000000 };
+  service.update(0, { ...service.draft.request, clips: [clip] });
+  const plan = await service.call("plan_export", { revision: 1, clipIds: [clip.id] });
+  if (!plan.ok) throw new Error();
+  ready = false;
+  for (const [name, input] of [
+    ["plan_export", { revision: 1, clipIds: [clip.id] }],
+    ["preview_frame", { revision: 1, clipId: clip.id, atUs: 0 }],
+    ["start_export", { planId: (plan.data as { planId: string }).planId, requestId: "blocked" }],
+  ] as const)
+    expect(await service.call(name, input)).toMatchObject({
+      ok: false,
+      error: { code: "TOOLS_UNAVAILABLE" },
+    });
+  expect((await service.call("get_editor_context", {})).ok).toBe(true);
+  expect(
+    (
+      await service.call("set_timeline", {
+        expectedRevision: 1,
+        clips: [{ ...clip, endUs: 2000000 }],
+      })
+    ).ok,
+  ).toBe(true);
+});

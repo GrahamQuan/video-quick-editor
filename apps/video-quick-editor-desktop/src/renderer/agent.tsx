@@ -19,6 +19,7 @@ function formatToolResult(text: string): string {
 export function AgentChat(): React.JSX.Element {
   const {
     settings,
+    dependencies,
     assets,
     importWithDialog,
     importLocalPaths,
@@ -247,6 +248,7 @@ export function AgentChat(): React.JSX.Element {
             )}
             {!assets.length && (
               <button
+                disabled={dependencies.status !== "ready"}
                 onClick={() => void importWithDialog()}
               >
                 {zh ? "导入视频" : "Import videos"}
@@ -317,7 +319,10 @@ export function AgentChat(): React.JSX.Element {
                   clearing ||
                   !!busy ||
                   submitting ||
-                  (!importPaths && !model?.hasApiKey)
+                  (importPaths
+                    ? dependencies.status !== "ready"
+                    : !model?.hasApiKey ||
+                      (!!parseImportInstruction(input) && dependencies.status !== "ready"))
                 }
               >
                 {importPaths ? copy.chatPathImport : zh ? "发送" : "Send"}

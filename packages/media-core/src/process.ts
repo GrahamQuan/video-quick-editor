@@ -10,6 +10,7 @@ export async function runProcess(
   args: string[],
   options: { signal?: AbortSignal; onStdout?: (chunk: string) => void; stderrLimit?: number } = {},
 ): Promise<ProcessResult> {
+  options.signal?.throwIfAborted();
   return await new Promise((resolve, reject) => {
     const child = spawn(executable, args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -25,7 +26,7 @@ export async function runProcess(
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
+      stdout = `${stdout}${chunk}`.slice(-2_000_000);
       options.onStdout?.(chunk);
     });
     child.stderr.on("data", (chunk: string) => {

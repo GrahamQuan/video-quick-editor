@@ -146,7 +146,9 @@ export class EditorService {
     } catch (caught) {
       let e = caught;
       if (!(e instanceof ServiceError) && e instanceof Error) {
-        if (/HDR|高位深|旋转/u.test(e.message))
+        if (e.message.startsWith("TOOLS_UNAVAILABLE"))
+          e = new ServiceError("TOOLS_UNAVAILABLE", e.message);
+        else if (/HDR|高位深|旋转/u.test(e.message))
           e = new ServiceError(
             "UNSUPPORTED_MEDIA",
             "HDR, high bit depth or rotation metadata cannot be re-encoded; choose a supported input or source/copy / HDR、高位深或旋转 metadata 暂不支持重编码",
