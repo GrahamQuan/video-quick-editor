@@ -29,7 +29,10 @@ jobs:
       - name: Prepare runner media tools
         run: |
           test "$(uname -m)" = arm64
-          brew install ffmpeg
+          brew install ffmpeg-full
+          # These links affect only the disposable runner; tests use these explicit paths.
+          ln -sf "$(brew --prefix ffmpeg-full)/bin/ffmpeg" /opt/homebrew/bin/ffmpeg
+          ln -sf "$(brew --prefix ffmpeg-full)/bin/ffprobe" /opt/homebrew/bin/ffprobe
           /opt/homebrew/bin/ffmpeg -version
           /opt/homebrew/bin/ffprobe -version
       - name: Validate release automation

@@ -43,7 +43,7 @@ Builds without a Developer ID use a local ad-hoc signature and are **not notariz
 
 Download stable versions and development builds from [GitHub Releases](https://github.com/GrahamQuan/video-quick-editor/releases).
 
-Every push to `main` triggers **Main prerelease**; it can also be run manually from Actions on `main`. The workflow uses a macOS arm64 runner, Node.js 24 and the pinned pnpm version, runs typecheck, lint, unit/media and packaged Electron tests, then builds a DMG. FFmpeg is installed only in the disposable CI runner for testing, never in the installer.
+Every push to `main` triggers **Main prerelease**; it can also be run manually from Actions on `main`. The workflow uses a macOS arm64 runner, Node.js 24 and the pinned pnpm version, runs typecheck, lint, unit/media and packaged Electron tests, then builds a DMG. Homebrew `ffmpeg-full` is installed only in the disposable CI runner for testing (including `drawtext`), never in the installer.
 
 Each run publishes a separate prerelease such as `v0.1.0-main.12`, where `0.1.0` is the desktop package version and `12` is the workflow run number. CI changes the app version only in its checkout; it does not commit version bumps or overwrite the existing stable release. The DMG filename and app version match the release. The build job has read-only repository access; only the publishing job receives `contents: write` through `GITHUB_TOKEN`, with no additional secrets required.
 
