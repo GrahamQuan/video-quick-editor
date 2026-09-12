@@ -112,7 +112,8 @@ test("explicit trim/combine selection and session FIFO exports use only their fr
     await page.getByRole("textbox", { name: "Out point", exact: true }).fill("00:00:01.500");
     await page.getByRole("heading", { name: "B.mp4", exact: true }).click();
     await page.getByRole("button", { name: "Add trim to queue" }).click();
-    await expect(page.locator("footer [role=status]")).toContainText("Added to queue");
+    await expect(page.getByTestId("queue-toast")).toContainText("Added to queue");
+    await expect(page.getByTestId("queue-toast")).toHaveCount(0, { timeout: 4500 });
     await expect(trim).toBeVisible();
     await combine.click();
     await page.getByRole("checkbox", { name: "Combine B.mp4 2", exact: true }).click();
@@ -133,6 +134,9 @@ test("explicit trim/combine selection and session FIFO exports use only their fr
     await expect
       .poll(async () => (await page.evaluate(() => window.videoQuickEditor.getJobs())).length)
       .toBe(2);
+    await expect(page.getByTestId("queue-toast")).toContainText("Added to queue");
+    await page.getByRole("button", { name: "Dismiss notification" }).click();
+    await expect(page.getByTestId("queue-toast")).toHaveCount(0);
     const initial = await page.evaluate(() => window.videoQuickEditor.getJobs());
     expect(initial[0]!.request.taskKind).toBe("trim");
     expect(initial[0]!.clipNames).toEqual(["B.mp4"]);
@@ -167,6 +171,7 @@ test("explicit trim/combine selection and session FIFO exports use only their fr
     );
     await page.reload();
     await expect(page.locator("article strong")).toHaveCount(4);
+    await expect(page.getByTestId("queue-toast")).toHaveCount(0);
     await page.getByRole("link", { name: /^Exports/ }).click();
     await expect(page.getByText("Waiting position: 1", { exact: true })).toBeVisible();
     await writeFile(gate, "go");

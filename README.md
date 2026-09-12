@@ -31,6 +31,8 @@ Import multiple videos and open **Combine**. Confirm which clips to include, arr
 
 Different video sizes are scaled proportionally, with black padding when needed. You can keep editing after submitting an export: each submitted task retains its original settings, and tasks run one at a time.
 
+A notification confirms each new queued task. It disappears after 3 seconds and can be dismissed.
+
 ## Add a text watermark
 
 Select a clip, enable its text watermark, and enter your text.

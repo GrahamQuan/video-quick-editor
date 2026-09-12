@@ -1,3 +1,4 @@
+import { QueueToasts } from "./queue-toasts.js";
 import { AppUpdateSettings } from "./app-updates.js";
 import { TrimRange } from "./trim-range.js";
 import { AgentChat } from "./agent.js";
@@ -129,6 +130,7 @@ function Shell(): React.JSX.Element {
       <main className="editor-main min-h-[calc(100vh-72px)]">
         <DependencyBanner />
         <Outlet />
+        <QueueToasts />
       </main>
     </div>
   );
@@ -147,7 +149,6 @@ function EditorPage(): React.JSX.Element {
   const selected = store.selectedClip;
   const asset = store.selectedAsset;
   const isCombine = store.operation === "combine";
-  const [queuedId, setQueuedId] = useState<string | null>(null);
   const submitting = useRef(false);
   const activeJob = store.jobs.find((job) => !isTerminalJob(job) && job.state !== "queued");
   const totalUs = store.taskClips.reduce((total, clip) => total + clip.endUs - clip.startUs, 0);
@@ -226,8 +227,7 @@ function EditorPage(): React.JSX.Element {
     setAction("validating");
     try {
       const request = await store.createRequest();
-      const job = await window.videoQuickEditor.startExport(request);
-      setQueuedId(job.id);
+      await window.videoQuickEditor.startExport(request);
     } catch (error) {
       store.setError(message(error));
     }
@@ -792,11 +792,6 @@ function EditorPage(): React.JSX.Element {
           <span className="text-[9px] text-[#71808c]">{copy.totalSelectedDuration}</span>
         </div>
         <div className="min-w-0 flex-1 text-xs text-[#9ba8b3]">
-          {queuedId && (
-            <p role="status">
-              {copy.queuedNotice} · {queuedId}
-            </p>
-          )}
           {activeJob && (
             <p>
               {jobStateLabel(activeJob, language)} · {jobPhaseLabel(activeJob.phase, language)} ·{" "}
