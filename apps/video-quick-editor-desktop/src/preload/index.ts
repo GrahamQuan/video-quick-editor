@@ -12,6 +12,9 @@ const api: VideoQuickEditorApi = {
     await ipcRenderer.invoke("app:update-check", includePrereleases),
   openAppUpdate: async () => await ipcRenderer.invoke("app:update-open"),
   subscribeAppUpdate: (listener) => subscribe("app:update-state", listener),
+  getAssets: async () => await ipcRenderer.invoke("assets:get"),
+  retryExport: async (jobId, requestId) =>
+    await ipcRenderer.invoke("export:retry", { jobId, requestId }),
   getDraft: async () => await ipcRenderer.invoke("editor:get"),
   updateDraft: async (input) => await ipcRenderer.invoke("editor:update", input),
   subscribeDraft: (listener) => subscribe("editor:draft", listener),

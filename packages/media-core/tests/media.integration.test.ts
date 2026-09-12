@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -138,9 +138,19 @@ describe("真实 FFmpeg media integration", () => {
       tempDirectory: temp,
       replaceAuthorized: false,
       signal: new AbortController().signal,
+      // Another process claims the name after encoding/verification, before publication.
+      beforePublish: async () => {
+        await writeFile(output, "existing target");
+      },
+      resolveOutputConflict: async () => join(directory, "resolved-conflict.mp4"),
       onPhase: () => undefined,
     });
-    const result = await probeAsset(ffprobe, output, "00000000-0000-4000-8000-000000000003");
+    expect(await readFile(output, "utf8")).toBe("existing target");
+    const result = await probeAsset(
+      ffprobe,
+      plan.finalOutputPath,
+      "00000000-0000-4000-8000-000000000003",
+    );
     expect(result.durationUs).toBeGreaterThan(850_000);
     expect(result.durationUs).toBeLessThan(1_150_000);
     expect(result.video.width).toBe(320);

@@ -5,6 +5,7 @@ export const positionSchema = z.enum(["top-left", "top-right", "bottom-left", "b
 export const exportModeSchema = z.enum(["accurate", "normalize", "copy"]);
 export const languageSchema = z.enum(["en", "zh-CN"]);
 export const jobStateSchema = z.enum([
+  "queued",
   "validating",
   "preparing",
   "running",
@@ -84,31 +85,47 @@ export const outputSelectionSchema = z.object({
   displayPath: z.string(),
   replaceAuthorized: z.boolean(),
 });
-export const exportRequestSchema = z.object({
-  outputProfile: z.enum(["mp4-compatible", "source"]).default("source"),
-  clips: z
-    .array(clipSchema)
-    .min(1)
-    .superRefine((clips, ctx) => {
-      clips.forEach((clip, index) => {
-        if (!clip.watermark) return;
-        const result = watermarkSchema.safeParse(clip.watermark);
-        if (!result.success)
-          for (const issue of result.error.issues)
-            ctx.addIssue({ ...issue, path: [index, "watermark", ...issue.path] });
-      });
+export const exportRequestSchema = z
+  .object({
+    taskKind: z.enum(["trim", "combine"]).optional(),
+    requestId: z.string().min(1).max(128).optional(),
+    outputProfile: z.enum(["mp4-compatible", "source"]).default("source"),
+    clips: z
+      .array(clipSchema)
+      .min(1)
+      .superRefine((clips, ctx) => {
+        clips.forEach((clip, index) => {
+          if (!clip.watermark) return;
+          const result = watermarkSchema.safeParse(clip.watermark);
+          if (!result.success)
+            for (const issue of result.error.issues)
+              ctx.addIssue({ ...issue, path: [index, "watermark", ...issue.path] });
+        });
+      }),
+    mode: exportModeSchema,
+    modeWasManuallySelected: z.boolean(),
+    watermark: watermarkSchema,
+    output: outputSelectionSchema.nullable(),
+    videoCodec: z.enum(["h264", "hevc"]).nullable(),
+    normalize: z.object({
+      width: z.number().int().positive().nullable(),
+      height: z.number().int().positive().nullable(),
+      fps: z.string().nullable(),
     }),
-  mode: exportModeSchema,
-  modeWasManuallySelected: z.boolean(),
-  watermark: watermarkSchema,
-  output: outputSelectionSchema.nullable(),
-  videoCodec: z.enum(["h264", "hevc"]).nullable(),
-  normalize: z.object({
-    width: z.number().int().positive().nullable(),
-    height: z.number().int().positive().nullable(),
-    fps: z.string().nullable(),
-  }),
-});
+  })
+  .superRefine((request, ctx) => {
+    if (
+      (request.taskKind === "trim" && request.clips.length !== 1) ||
+      (request.taskKind === "combine" && request.clips.length < 2)
+    )
+      ctx.addIssue({
+        code: "custom",
+        path: ["taskKind"],
+        message: "Task type does not match clip count",
+      });
+    if (new Set(request.clips.map((c) => c.id)).size !== request.clips.length)
+      ctx.addIssue({ code: "custom", path: ["clips"], message: "Duplicate clip IDs" });
+  });
 export const dependencyFailureSchema = z.enum([
   "not-found",
   "not-executable",
@@ -161,6 +178,9 @@ export const exportJobSchema = z.object({
   resultPath: z.string().nullable(),
   error: z.string().nullable(),
   diagnostics: z.array(z.string()),
+  outputName: z.string().optional(),
+  clipNames: z.array(z.string()).optional(),
+  queueSequence: z.number().int().nonnegative().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -210,6 +230,8 @@ export interface VideoQuickEditorApi extends AgentApi {
   previewFrame(input: { assetId: string; atUs: number; watermark: WatermarkSpec }): Promise<string>;
   planExport(request: ExportRequest): Promise<ExportPlanView>;
   startExport(request: ExportRequest): Promise<ExportJob>;
+  retryExport(jobId: string, requestId: string): Promise<ExportJob>;
+  getAssets(): Promise<AssetView[]>;
   cancelExport(jobId: string): Promise<void>;
   deleteJobs(jobIds: string[]): Promise<void>;
   getJobs(): Promise<ExportJob[]>;
@@ -218,12 +240,16 @@ export interface VideoQuickEditorApi extends AgentApi {
   openOutput(jobId: string): Promise<void>;
 }
 
-export const draftRequestSchema = exportRequestSchema.extend({
+export const draftRequestSchema = exportRequestSchema.safeExtend({
   clips: z.array(clipSchema).max(100),
   watermark: z.object(watermarkSchema.shape),
 });
 export const editorDraftSchema = z.object({
   revision: z.number().int().nonnegative(),
+  operation: z.enum(["trim", "combine"]).default("trim"),
+  combineClipIds: z.array(z.string().uuid()).default([]),
+  combineInitialized: z.boolean().default(false),
+  combineOrderCustomized: z.boolean().default(false),
   selectedClipId: z.string().uuid().nullable(),
   request: draftRequestSchema,
 });
@@ -358,6 +384,10 @@ export interface AgentApi {
     expectedRevision: number;
     request: EditorDraft["request"];
     selectedClipId: string | null;
+    operation?: "trim" | "combine";
+    combineClipIds?: string[];
+    combineInitialized?: boolean;
+    combineOrderCustomized?: boolean;
   }): Promise<EditorDraft>;
   subscribeDraft(listener: (draft: EditorDraft) => void): () => void;
   listModelProfiles(): Promise<ModelProfiles>;

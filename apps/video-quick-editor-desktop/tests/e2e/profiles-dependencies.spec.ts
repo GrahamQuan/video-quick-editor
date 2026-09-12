@@ -483,6 +483,30 @@ test("running exports keep their tools while queued exports recheck changed depe
     expect(await readFile(fixture)).toBeTruthy();
     expect(await readFile(output)).toBeTruthy();
     await expect(readFile(queuedOutput)).rejects.toThrow();
+    const retried = await page.evaluate(async (jobId) => {
+      await window.videoQuickEditor.updateSettings({ ffmpegPath: "/opt/homebrew/bin/ffmpeg" });
+      const requestId = crypto.randomUUID();
+      const [first, repeated] = await Promise.all([
+        window.videoQuickEditor.retryExport(jobId, requestId),
+        window.videoQuickEditor.retryExport(jobId, requestId),
+      ]);
+      if (first.id !== repeated.id) throw new Error("Duplicate retry job");
+      return first;
+    }, queued.id);
+    expect(retried.id).not.toBe(queued.id);
+    await expect
+      .poll(
+        async () =>
+          (await page.evaluate(() => window.videoQuickEditor.getJobs())).find(
+            (j) => j.id === retried.id,
+          )?.state,
+      )
+      .toBe("completed");
+    expect(
+      (await page.evaluate(() => window.videoQuickEditor.getJobs())).find((j) => j.id === queued.id)
+        ?.state,
+    ).toBe("failed");
+    expect(await readFile(queuedOutput)).toBeTruthy();
   } finally {
     await app.close();
   }

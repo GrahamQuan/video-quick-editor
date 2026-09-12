@@ -161,3 +161,84 @@ it("returns repairable dependency errors from media tools while context and draf
     ).ok,
   ).toBe(true);
 });
+
+it("selection revisions preserve unrelated edits and Agent plans use explicit IDs independently of UI members", async () => {
+  const sources = ["A", "B", "C", "D"].map((fileName) => ({
+    ...asset,
+    id: randomUUID(),
+    fileName,
+  }));
+  const clips = sources.map((a) => ({
+    id: randomUUID(),
+    assetId: a.id,
+    startUs: 0,
+    endUs: 2_000_000,
+  }));
+  const start = vi.fn(
+    async (request) => ({ id: randomUUID(), request, state: "queued" }) as ExportJob,
+  );
+  const plan = vi.fn(async () => ({
+    expectedDurationUs: 2_000_000,
+    outputPath: "/private/output.mp4",
+    changes: [],
+    warnings: [],
+  }));
+  const jobs: ExportJob[] = [];
+  const service = new EditorService({
+    assets: () => sources,
+    fontAvailable: () => false,
+    output: () => null,
+    plan,
+    start: async (request) => {
+      const job = await start(request);
+      jobs.push(job);
+      return job;
+    },
+    jobs: () => jobs,
+    cancel: (id) => {
+      jobs.find((j) => j.id === id)!.state = "cancelled";
+    },
+    preview: async () => "",
+    emit: () => {},
+  });
+  service.update(0, { ...service.draft.request, clips });
+  expect(service.draft.operation).toBe("trim");
+  service.update(1, service.draft.request, clips[0]!.id, {
+    operation: "combine",
+    combineClipIds: [clips[3]!.id, clips[1]!.id],
+    combineInitialized: true,
+  });
+  const saved = structuredClone(service.draft.request.clips);
+  service.update(2, service.draft.request, clips[2]!.id);
+  expect(service.draft.combineClipIds).toEqual([clips[3]!.id, clips[1]!.id]);
+  expect(service.draft.request.clips).toEqual(saved);
+  expect(() => service.update(2, service.draft.request, null, { combineClipIds: [] })).toThrow(
+    "editor changed",
+  );
+  for (const ids of [[clips[0]!.id], [clips[2]!.id], [clips[3]!.id, clips[1]!.id]]) {
+    const result = await service.call("plan_export", {
+      revision: service.draft.revision,
+      clipIds: ids,
+    });
+    if (!result.ok) throw Error("Plan failed");
+    const accepted = await service.call("start_export", {
+      planId: (result.data as { planId: string }).planId,
+      requestId: randomUUID(),
+    });
+    expect(accepted).toMatchObject({ ok: true, data: { state: "queued" } });
+  }
+  expect(jobs.map((j) => j.request.taskKind)).toEqual(["trim", "trim", "combine"]);
+  expect(jobs.map((j) => j.request.clips.map((c) => c.id))).toEqual([
+    [clips[0]!.id],
+    [clips[2]!.id],
+    [clips[3]!.id, clips[1]!.id],
+  ]);
+  expect(await service.call("cancel_export", { jobId: jobs[1]!.id })).toMatchObject({
+    ok: true,
+    data: [{ state: "cancelled" }],
+  });
+  service.update(service.draft.revision, { ...service.draft.request, clips: [clips[0]!] });
+  expect(service.draft.operation).toBe("trim");
+  expect(service.draft.combineClipIds).toEqual([]);
+  expect(jobs[2]!.request.clips).toHaveLength(2);
+});

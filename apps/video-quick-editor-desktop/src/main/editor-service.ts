@@ -3,6 +3,7 @@ import {
   agentToolSchemas,
   watermarkSchema,
   draftRequestSchema,
+  exportRequestSchema,
   toolResultSchema,
   type AssetView,
   type EditorDraft,
@@ -53,6 +54,10 @@ interface Dependencies {
 export class EditorService {
   draft: EditorDraft = {
     revision: 0,
+    operation: "trim",
+    combineClipIds: [],
+    combineInitialized: false,
+    combineOrderCustomized: false,
     selectedClipId: null,
     request: {
       outputProfile: "mp4-compatible",
@@ -90,6 +95,12 @@ export class EditorService {
     expectedRevision: number,
     raw: unknown,
     selectedClipId: string | null = this.draft.selectedClipId,
+    selection: {
+      operation?: "trim" | "combine" | undefined;
+      combineClipIds?: string[] | undefined;
+      combineInitialized?: boolean | undefined;
+      combineOrderCustomized?: boolean | undefined;
+    } = {},
   ) {
     this.revision(expectedRevision);
     const request = draftRequestSchema.parse(raw);
@@ -115,7 +126,21 @@ export class EditorService {
         "INVALID_ARGUMENT",
         "MP4 compatible requires H.264 re-encoding. Select source for copy / HEVC.",
       );
+    const combineClipIds = (selection.combineClipIds ?? this.draft.combineClipIds).filter((id) =>
+      ids.has(id),
+    );
+    if (new Set(combineClipIds).size !== combineClipIds.length)
+      throw new ServiceError("INVALID_ARGUMENT", "Duplicate combine clip IDs");
+    const canCombine = new Set(request.clips.map((c) => c.assetId)).size >= 2;
+    const operation = canCombine ? (selection.operation ?? this.draft.operation) : "trim";
+    if (!request.modeWasManuallySelected)
+      request.mode =
+        operation === "combine" && combineClipIds.length > 1 ? "normalize" : "accurate";
     this.draft = {
+      operation: canCombine ? (selection.operation ?? this.draft.operation) : "trim",
+      combineClipIds,
+      combineInitialized: selection.combineInitialized ?? this.draft.combineInitialized,
+      combineOrderCustomized: selection.combineOrderCustomized ?? this.draft.combineOrderCustomized,
       revision: this.draft.revision + 1,
       request,
       selectedClipId: request.clips.some((c) => c.id === selectedClipId)
@@ -281,7 +306,8 @@ export class EditorService {
         });
         if (!request.modeWasManuallySelected)
           request.mode = request.clips.length > 1 ? "normalize" : "accurate";
-        const plan = await this.deps.plan(request);
+        request.taskKind = request.clips.length === 1 ? "trim" : "combine";
+        const plan = await this.deps.plan(exportRequestSchema.parse(request));
         this.revision(i.revision);
         const planId = randomUUID();
         this.plans.set(planId, { revision: i.revision, request });
@@ -299,7 +325,9 @@ export class EditorService {
         if (old) {
           if (old.planId !== i.planId)
             throw new ServiceError("INVALID_ARGUMENT", "requestId already belongs to another plan");
-          return { jobId: (await old.result).id };
+          const accepted = await old.result;
+          const job = this.deps.jobs().find((j) => j.id === accepted.id) ?? accepted;
+          return { jobId: job.id, state: job.state };
         }
         const plan = this.plans.get(i.planId);
         if (!plan || plan.revision !== this.draft.revision)
@@ -308,10 +336,14 @@ export class EditorService {
           await this.deps.plan(plan.request);
           if (plan.revision !== this.draft.revision)
             throw new ServiceError("PLAN_EXPIRED", "Editor changed during validation");
-          return await this.deps.start(structuredClone(plan.request));
+          return await this.deps.start({
+            ...structuredClone(plan.request),
+            requestId: i.requestId,
+          });
         })();
         this.requests.set(i.requestId, { planId: i.planId, result });
-        return { jobId: (await result).id };
+        const job = await result;
+        return { jobId: job.id, state: job.state };
       }
       case "get_export_jobs": {
         const i = agentToolSchemas[name].parse(raw);
@@ -321,8 +353,15 @@ export class EditorService {
           .map((j) => ({
             jobId: j.id,
             state: j.state,
+            taskKind: j.request.taskKind ?? (j.request.clips.length === 1 ? "trim" : "combine"),
+            clipCount: j.request.clips.length,
+            expectedDurationUs: j.request.clips.reduce(
+              (sum, clip) => sum + clip.endUs - clip.startUs,
+              0,
+            ),
+            queueSequence: j.queueSequence,
             progress: j.progress,
-            outputName: j.resultPath?.split(/[\\/]/u).at(-1) ?? null,
+            outputName: j.resultPath?.split(/[\\/]/u).at(-1) ?? j.outputName ?? null,
             error: j.error ? "Export failed; inspect local diagnostics" : null,
           }));
       }

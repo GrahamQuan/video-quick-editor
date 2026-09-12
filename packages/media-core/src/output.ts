@@ -14,11 +14,13 @@ export function defaultOutputName(
 export async function allocateOutputPath(
   directory: string,
   requestedName: string,
+  reserved: ReadonlySet<string> = new Set(),
 ): Promise<string> {
   const extension = extname(requestedName);
   const stem = basename(requestedName, extension);
   for (let index = 1; index < 10_000; index += 1) {
     const candidate = join(directory, `${stem}${index === 1 ? "" : `_${index}`}${extension}`);
+    if (reserved.has(candidate)) continue;
     try {
       await access(candidate, constants.F_OK);
     } catch {

@@ -20,6 +20,13 @@ describe("输出保护", () => {
     expect(await allocateOutputPath(directory, "中文_clip.mp4")).toBe(
       join(directory, "中文_clip_2.mp4"),
     );
+    expect(
+      await allocateOutputPath(
+        directory,
+        "中文_clip.mp4",
+        new Set([join(directory, "中文_clip_2.mp4")]),
+      ),
+    ).toBe(join(directory, "中文_clip_3.mp4"));
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 8, 7, 9, 5, 3));
     expect(defaultOutputName("中文.mp4", 2)).toBe("2026_09_07--09_05_03.mp4");

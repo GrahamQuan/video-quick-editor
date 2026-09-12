@@ -1,4 +1,5 @@
 import { AppUpdates } from "./app-updates.js";
+import { ExportQueue } from "./export-queue.js";
 import { Dependencies, type ToolPaths } from "./dependencies.js";
 import { resolveImportPaths } from "./import-paths.js";
 import { findDefaultFont } from "./fonts.js";
@@ -7,7 +8,7 @@ import { ModelStore } from "./model.js";
 import { AgentRunner } from "./agent.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { mediaResponse } from "./media-response.js";
 import {
@@ -42,6 +43,7 @@ import {
   modelTestResultSchema,
   agentReservationSchema,
   exportRequestSchema,
+  timestampOutputName,
   settingsSchema,
   watermarkSchema,
   type ExportJob,
@@ -61,14 +63,15 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const assets = new Map<string, ProbedAsset>();
+const sourceIdentities = new Map<string, { dev: number; ino: number }>();
 const fonts = new Map<string, string>();
 const outputSelections = new Map<string, { path: string; replaceAuthorized: boolean }>();
 const mediaFiles = new Map<string, string>();
-const jobs: ExportJob[] = [];
-const controllers = new Map<string, AbortController>();
+
 const terminalJobStates = new Set<ExportJob["state"]>(["completed", "failed", "cancelled"]);
 let mainWindow: BrowserWindow | null = null;
 let allowQuit = false;
+let quitPromptOpen = false;
 
 interface PersistedSettings {
   ffmpegPath: string;
@@ -179,6 +182,8 @@ async function importPaths(raw: unknown): Promise<ProbedAsset[]> {
     result.push(asset);
   }
   for (const asset of result) {
+    const identity = await stat(asset.path);
+    sourceIdentities.set(asset.id, { dev: identity.dev, ino: identity.ino });
     assets.set(asset.id, asset);
     mediaFiles.set(`asset/${asset.id}`, asset.path);
   }
@@ -199,7 +204,10 @@ function sanitizeAssets(items: ProbedAsset[]): Array<Omit<ProbedAsset, "path" | 
   }));
 }
 
-async function resolveExport(request: ExportRequest): Promise<{
+async function resolveExport(
+  request: ExportRequest,
+  reservedOutput?: string,
+): Promise<{
   clips: ResolvedClip[];
   fontPath: string | null;
   output: { path: string; replaceAuthorized: boolean };
@@ -211,7 +219,13 @@ async function resolveExport(request: ExportRequest): Promise<{
   });
   for (const clip of clips) {
     const current = await stat(clip.asset.path);
-    if (current.size !== clip.asset.size || current.mtimeMs !== clip.asset.mtimeMs)
+    const identity = sourceIdentities.get(clip.asset.id);
+    if (
+      current.size !== clip.asset.size ||
+      current.mtimeMs !== clip.asset.mtimeMs ||
+      current.dev !== identity?.dev ||
+      current.ino !== identity?.ino
+    )
       throw new Error(`${clip.asset.fileName} 在导入后已变更，请重新导入`);
   }
   const fontPath = request.watermark.fontId ? (fonts.get(request.watermark.fontId) ?? null) : null;
@@ -228,10 +242,12 @@ async function resolveExport(request: ExportRequest): Promise<{
     output = selected;
   } else {
     output = {
-      path: await allocateOutputPath(
-        app.getPath("downloads"),
-        defaultOutputName(clips[0]!.asset.fileName, clips.length, request.outputProfile),
-      ),
+      path:
+        reservedOutput ??
+        (await allocateOutputPath(
+          app.getPath("downloads"),
+          defaultOutputName(clips[0]!.asset.fileName, clips.length, request.outputProfile),
+        )),
       replaceAuthorized: false,
     };
   }
@@ -255,14 +271,27 @@ async function resolveExport(request: ExportRequest): Promise<{
         : first.displayHeight,
     );
   }
-  await access(dirname(output.path), constants.W_OK);
+  let writableParent = dirname(output.path);
+  for (;;) {
+    try {
+      await access(writableParent, constants.W_OK);
+      break;
+    } catch (error) {
+      if (
+        (error as NodeJS.ErrnoException).code !== "ENOENT" ||
+        dirname(writableParent) === writableParent
+      )
+        throw error;
+      writableParent = dirname(writableParent);
+    }
+  }
   const expectedExtension =
     request.outputProfile === "mp4-compatible" ? ".mp4" : `.${clips[0]!.asset.container}`;
   if (extname(output.path).toLowerCase() !== expectedExtension)
     throw new Error(`输出容器继承首段，文件扩展名必须为 ${expectedExtension}`);
   await assertOutputNotInput(
     output.path,
-    clips.map((clip) => clip.asset.path),
+    [...assets.values()].map((asset) => asset.path),
   );
   return { clips, fontPath, output };
 }
@@ -270,29 +299,38 @@ async function resolveExport(request: ExportRequest): Promise<{
 async function makePlan(
   request: ExportRequest,
   realRun: boolean,
+  reservedOutput?: string,
 ): Promise<{ plan: ExecutionPlan; tempDirectory: string; tools: ToolPaths }> {
+  request = {
+    ...request,
+    mode: request.modeWasManuallySelected
+      ? request.mode
+      : request.clips.length === 1
+        ? "accurate"
+        : "normalize",
+  };
   const tools = await dependencies.requireReady();
-  const resolvedExport = await resolveExport(request);
+  const resolvedExport = await resolveExport(request, reservedOutput);
   const outputDirectory = dirname(resolvedExport.output.path);
   if (realRun) await mkdir(outputDirectory, { recursive: true });
   const tempDirectory = realRun
     ? await mkdtemp(join(outputDirectory, ".video-quick-editor-"))
     : join(app.getPath("temp"), "video-quick-editor-plan");
   const tempOutputPath = join(tempDirectory, `output${extname(resolvedExport.output.path)}`);
-  const textFilePath = request.watermark.enabled ? join(tempDirectory, "watermark.txt") : null;
-  if (realRun && textFilePath) await writeFile(textFilePath, request.watermark.text, "utf8");
-  const watermarkResources = await Promise.all(
-    request.clips.map(async (clip, index) => {
-      const watermark = clip.watermark ?? request.watermark;
-      const path = watermark.enabled ? join(tempDirectory, `watermark-${index}.txt`) : null;
-      if (realRun && path) await writeFile(path, watermark.text, "utf8");
-      return {
-        fontPath: watermark.fontId ? (fonts.get(watermark.fontId) ?? null) : null,
-        textFilePath: path,
-      };
-    }),
-  );
   try {
+    const textFilePath = request.watermark.enabled ? join(tempDirectory, "watermark.txt") : null;
+    if (realRun && textFilePath) await writeFile(textFilePath, request.watermark.text, "utf8");
+    const watermarkResources = await Promise.all(
+      request.clips.map(async (clip, index) => {
+        const watermark = clip.watermark ?? request.watermark;
+        const path = watermark.enabled ? join(tempDirectory, `watermark-${index}.txt`) : null;
+        if (realRun && path) await writeFile(path, watermark.text, "utf8");
+        return {
+          fontPath: watermark.fontId ? (fonts.get(watermark.fontId) ?? null) : null,
+          textFilePath: path,
+        };
+      }),
+    );
     const plan = createExecutionPlan({
       watermarkResources,
       ffmpegPath: tools.ffmpegPath,
@@ -313,10 +351,6 @@ async function makePlan(
 
 function emitJobs(): void {
   mainWindow?.webContents.send("export:jobs", structuredClone(jobs));
-}
-function updateJob(job: ExportJob, update: Partial<ExportJob>): void {
-  Object.assign(job, update, { updatedAt: new Date().toISOString() });
-  emitJobs();
 }
 
 async function createProxy(assetId: string): Promise<string> {
@@ -375,7 +409,12 @@ async function previewFrame(raw: unknown): Promise<string> {
   const path = join(directory, `${id}.png`);
   const args = ["-nostdin", "-y", "-ss", secondsArg(input.atUs), "-i", asset.path];
 
-  const first = draft.clips[0] ? assets.get(draft.clips[0].assetId) : asset;
+  const firstId =
+    editor.draft.operation === "combine"
+      ? editor.draft.combineClipIds[0]
+      : editor.draft.selectedClipId;
+  const firstClip = draft.clips.find((c) => c.id === firstId);
+  const first = firstClip ? assets.get(firstClip.assetId) : asset;
   const outputWidth =
     draft.mode === "normalize"
       ? (draft.normalize.width ?? first?.video.displayWidth ?? asset.video.displayWidth)
@@ -417,93 +456,127 @@ async function previewFrame(raw: unknown): Promise<string> {
   return `media://frame/${id}`;
 }
 
-let exportQueue: Promise<void> = Promise.resolve();
-async function startExport(raw: unknown): Promise<ExportJob> {
-  const request = exportRequestSchema.parse(raw);
-  await dependencies.requireReady();
-  if (
-    request.output &&
-    jobs.some(
-      (job) =>
-        job.request.output?.token === request.output!.token &&
-        job.state !== "cancelled" &&
-        job.state !== "failed",
-    )
-  )
-    throw new Error(
-      "OUTPUT_CONFLICT: 输出选择已用于另一任务，请选择不同文件名 / Output already assigned; choose another filename",
-    );
-  const taskName = request.clips.length > 1 ? "组合" : "裁剪";
-  const now = new Date().toISOString();
-  const job: ExportJob = {
-    id: randomUUID(),
-    request: structuredClone(request),
-    state: "validating",
-    progress: 0,
-    phase: `校验${taskName}任务`,
-    resultPath: null,
-    error: null,
-    diagnostics: [],
-    createdAt: now,
-    updatedAt: now,
-  };
-  jobs.unshift(job);
-  emitJobs();
-  const controller = new AbortController();
-  controllers.set(job.id, controller);
-  const run = async () => {
+const reservedPaths = new Set<string>();
+const consumedOutputTokens = new Set<string>();
+async function canonicalOutputParent(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || dirname(path) === path) throw error;
+    return join(await canonicalOutputParent(dirname(path)), basename(path));
+  }
+}
+async function outputIdentity(path: string): Promise<string> {
+  try {
+    const info = await stat(path);
+    return `inode:${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return join(await canonicalOutputParent(dirname(path)), basename(path))
+      .normalize("NFC")
+      .toLowerCase();
+  }
+}
+const reservedIdentities = new Set<string>();
+const exportQueue = new ExportQueue<{ request: ExportRequest; path: string; identity: string }>({
+  async accept(request, date) {
+    await dependencies.requireReady();
+    let path: string;
+    if (request.output) {
+      path = request.output.displayPath;
+      if (consumedOutputTokens.has(request.output.token))
+        throw new Error("OUTPUT_CONFLICT: Output authorization already used");
+    } else {
+      const asset = assets.get(request.clips[0]!.assetId);
+      if (!asset) throw new Error("ASSET_NOT_FOUND");
+      const name = timestampOutputName(asset.fileName, request.outputProfile, date);
+      path = await allocateOutputPath(app.getPath("downloads"), name, reservedPaths);
+    }
+    const identity = await outputIdentity(path);
+    if (reservedIdentities.has(identity) || reservedPaths.has(path))
+      throw new Error("OUTPUT_CONFLICT: Output already assigned");
+    await makePlan(request, false, path);
+    if (request.output && !request.output.replaceAuthorized) {
+      try {
+        await stat(path);
+        throw new Error("OUTPUT_CONFLICT: Output exists");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    reservedPaths.add(path);
+    reservedIdentities.add(identity);
+    if (request.output) consumedOutputTokens.add(request.output.token);
+    return {
+      snapshot: { request, path, identity },
+      outputName: basename(path),
+      clipNames: request.clips.map((c) => assets.get(c.assetId)!.fileName),
+    };
+  },
+  async execute({ request, path, identity }, signal, update) {
+    signal.throwIfAborted();
+    if (!request.output)
+      path = await allocateOutputPath(
+        dirname(path),
+        basename(path),
+        new Set([...reservedPaths].filter((p) => p !== path)),
+      );
+    reservedPaths.add(path);
+    const { plan, tempDirectory, tools } = await makePlan(request, true, path);
     try {
-      controller.signal.throwIfAborted();
-      const { plan, tempDirectory, tools } = await makePlan(request, true);
-      updateJob(job, { state: "preparing", phase: `准备${taskName}临时资源`, progress: 0 });
-      const selection = request.output ? outputSelections.get(request.output.token) : null;
+      signal.throwIfAborted();
+      update({ state: "preparing", phase: "准备临时资源", progress: null });
       await executePlan({
         ffmpegPath: tools.ffmpegPath,
         ffprobePath: tools.ffprobePath,
         plan,
         tempDirectory,
-        replaceAuthorized: selection?.replaceAuthorized ?? false,
-        signal: controller.signal,
+        replaceAuthorized: request.output?.replaceAuthorized ?? false,
+        signal,
+        async beforePublish() {
+          await assertOutputNotInput(
+            plan.finalOutputPath,
+            [...assets.values()].map((asset) => asset.path),
+          );
+          if (request.output && (await outputIdentity(plan.finalOutputPath)) !== identity)
+            throw new Error("OUTPUT_CONFLICT: Authorized target changed");
+        },
+        ...(!request.output
+          ? {
+              resolveOutputConflict: async () => {
+                const next = await allocateOutputPath(dirname(path), basename(path), reservedPaths);
+                reservedPaths.add(next);
+                return next;
+              },
+            }
+          : {}),
         onPhase(phase, progress) {
-          updateJob(job, {
+          update({
             state: phase.includes("验证") || phase.includes("发布") ? "verifying" : "running",
             phase,
             progress,
           });
         },
       });
-      updateJob(job, {
-        state: "completed",
-        phase: `${taskName}完成`,
-        progress: 1,
-        resultPath: plan.finalOutputPath,
-      });
-    } catch (error) {
-      updateJob(
-        job,
-        controller.signal.aborted
-          ? { state: "cancelled", phase: `${taskName}已中断`, error: null }
-          : {
-              state: "failed",
-              phase: `${taskName}失败`,
-              error: message(error),
-              diagnostics: [message(error)].slice(-20),
-            },
-      );
+      return plan.finalOutputPath;
     } finally {
-      controllers.delete(job.id);
+      await rm(tempDirectory, { recursive: true, force: true });
     }
-  };
-  exportQueue = exportQueue.then(run, run);
-  return structuredClone(job);
+  },
+  finish({ request, path, identity }, job) {
+    reservedPaths.delete(path);
+    reservedIdentities.delete(identity);
+    if ((job.state === "failed" || job.state === "cancelled") && request.output)
+      consumedOutputTokens.delete(request.output.token);
+  },
+  emit: emitJobs,
+});
+const jobs = exportQueue.jobs;
+function startExport(raw: unknown): Promise<ExportJob> {
+  return exportQueue.start(raw);
 }
 function cancelExport(id: string): void {
-  const job = jobs.find((item) => item.id === id);
-  if (!job) throw new Error("Unknown job");
-  const controller = controllers.get(id);
-  if (!controller) return;
-  updateJob(job, { state: "cancelling", phase: "正在中断并清理半成品" });
-  controller.abort();
+  exportQueue.cancel(id);
 }
 let models: ModelStore;
 let agent: AgentRunner;
@@ -540,9 +613,13 @@ function installIpc(): void {
         expectedRevision: z.number().int().nonnegative(),
         request: z.unknown(),
         selectedClipId: z.string().uuid().nullable(),
+        operation: z.enum(["trim", "combine"]).optional(),
+        combineClipIds: z.array(z.string().uuid()).optional(),
+        combineInitialized: z.boolean().optional(),
+        combineOrderCustomized: z.boolean().optional(),
       })
       .parse(raw);
-    return editor.update(i.expectedRevision, i.request, i.selectedClipId);
+    return editor.update(i.expectedRevision, i.request, i.selectedClipId, i);
   });
   handle("model:profiles", () => modelProfilesSchema.parse(models.list()));
   handle("model:save-profile", async (_event, raw) =>
@@ -669,6 +746,15 @@ function installIpc(): void {
     };
     return view;
   });
+  handle("assets:get", () => sanitizeAssets([...assets.values()]));
+  handle("export:retry", async (_event, raw) => {
+    const { jobId, requestId } = z
+      .object({ jobId: z.string().uuid(), requestId: z.string().min(1).max(128) })
+      .parse(raw);
+    const job = jobs.find((j) => j.id === jobId);
+    if (!job || job.state !== "failed") throw new Error("Only failed jobs can be requeued");
+    return startExport({ ...structuredClone(job.request), requestId });
+  });
   handle("export:start", async (_event, raw) => await startExport(raw));
   handle("export:cancel", (_event, raw) => cancelExport(z.string().uuid().parse(raw)));
   handle("export:delete-jobs", (_event, raw) => {
@@ -699,10 +785,6 @@ function completedJob(raw: unknown): ExportJob {
   return job;
 }
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -722,20 +804,30 @@ async function createWindow(): Promise<void> {
     if (url !== mainWindow?.webContents.getURL()) event.preventDefault();
   });
   mainWindow.on("close", (event) => {
-    if (allowQuit || !jobs.some((job) => !["completed", "failed", "cancelled"].includes(job.state)))
-      return;
+    if (allowQuit || !exportQueue.hasUnfinished) return;
     event.preventDefault();
+    if (quitPromptOpen) return;
+    quitPromptOpen = true;
     void dialog
       .showMessageBox(mainWindow!, {
         type: "warning",
-        buttons: ["继续留在应用", "取消任务并退出"],
+        buttons:
+          persisted.language === "zh-CN"
+            ? ["继续留在应用", "取消全部任务并退出"]
+            : ["Stay in app", "Cancel all jobs and quit"],
         defaultId: 0,
         cancelId: 0,
-        message: "导出仍在进行中",
+        message:
+          persisted.language === "zh-CN"
+            ? "仍有活动或等待中的导出任务"
+            : "Exports are running or waiting",
       })
-      .then(({ response }) => {
-        if (response !== 1) return;
-        for (const controller of controllers.values()) controller.abort();
+      .then(async ({ response }) => {
+        if (response !== 1) {
+          quitPromptOpen = false;
+          return;
+        }
+        await exportQueue.close();
         allowQuit = true;
         app.quit();
       });

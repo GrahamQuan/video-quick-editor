@@ -13,12 +13,14 @@ export function jobKind(job: ExportJob, language: Language = "en"): string {
 
 export function jobStateLabel(job: ExportJob, language: Language = "en"): string {
   if (language === "zh-CN") {
+    if (job.state === "queued") return "等待中";
     if (job.state === "completed") return "已完成";
     if (job.state === "failed") return "失败";
     if (job.state === "cancelled") return "已中断";
     if (job.state === "cancelling") return "正在中断";
     return `正在${jobKind(job, language)}`;
   }
+  if (job.state === "queued") return "Queued";
   if (job.state === "completed") return "Completed";
   if (job.state === "failed") return "Failed";
   if (job.state === "cancelled") return "Cancelled";
@@ -29,6 +31,12 @@ export function jobStateLabel(job: ExportJob, language: Language = "en"): string
 export function jobPhaseLabel(phase: string, language: Language): string {
   if (language === "zh-CN") return phase;
   const exact: Record<string, string> = {
+    等待中: "Waiting",
+    校验任务: "Validating request",
+    准备临时资源: "Preparing temporary resources",
+    导出完成: "Export completed",
+    导出失败: "Export failed",
+    已中断: "Cancelled",
     "拼接 copy 片段": "Concatenating copy-mode clips",
     精确剪辑并编码: "Trimming and encoding precisely",
     标准化并拼接: "Normalizing and combining",

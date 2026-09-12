@@ -44,6 +44,19 @@ it("legacy requests retain source and tools reject arbitrary paths", () => {
     videoCodec: null,
     normalize: { width: null, height: null, fps: null },
   };
+  expect(exportRequestSchema.safeParse({ ...request, taskKind: "combine" }).success).toBe(false);
+  expect(exportRequestSchema.safeParse({ ...request, taskKind: "trim" }).success).toBe(true);
+  const repeated = [
+    request.clips[0],
+    { ...request.clips[0], id: "00000000-0000-4000-8000-000000000003" },
+  ];
+  expect(
+    exportRequestSchema.safeParse({ ...request, clips: repeated, taskKind: "combine" }).success,
+  ).toBe(true);
+  expect(
+    exportRequestSchema.safeParse({ ...request, clips: repeated, taskKind: "trim" }).success,
+  ).toBe(false);
+  expect(exportRequestSchema.safeParse({ ...request, clips: repeated }).success).toBe(true);
   expect(exportRequestSchema.parse(request).outputProfile).toBe("source");
   expect(exportRequestSchema.parse(request).watermark.borderWidth).toBe(1);
   for (const borderWidth of [0, 4, 20]) {

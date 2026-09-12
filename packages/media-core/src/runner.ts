@@ -11,6 +11,8 @@ export async function executePlan(options: {
   tempDirectory: string;
   replaceAuthorized: boolean;
   signal: AbortSignal;
+  beforePublish?: () => Promise<void>;
+  resolveOutputConflict?: () => Promise<string>;
   onPhase: (phase: string, progress: number | null) => void;
 }): Promise<void> {
   const { plan, tempDirectory, signal, onPhase } = options;
@@ -60,10 +62,22 @@ export async function executePlan(options: {
     await verifyOutput(options.ffprobePath, plan.tempOutputPath, plan.outputProfile, plan.hasAudio);
     signal.throwIfAborted();
     onPhase("发布文件", 0.99);
+    await options.beforePublish?.();
+    signal.throwIfAborted();
     if (options.replaceAuthorized) {
       await rename(plan.tempOutputPath, plan.finalOutputPath);
     } else {
-      await link(plan.tempOutputPath, plan.finalOutputPath);
+      for (;;) {
+        signal.throwIfAborted();
+        try {
+          await link(plan.tempOutputPath, plan.finalOutputPath);
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !options.resolveOutputConflict)
+            throw error;
+          plan.finalOutputPath = await options.resolveOutputConflict();
+        }
+      }
       await rm(plan.tempOutputPath, { force: true });
     }
   } finally {

@@ -146,9 +146,11 @@ function EditorPage(): React.JSX.Element {
   const player = useRef<HTMLVideoElement>(null);
   const selected = store.selectedClip;
   const asset = store.selectedAsset;
-  const isCombine = store.clips.length > 1;
-  const activeJob = store.jobs.find((job) => !isTerminalJob(job));
-  const totalUs = store.clips.reduce((total, clip) => total + clip.endUs - clip.startUs, 0);
+  const isCombine = store.operation === "combine";
+  const [queuedId, setQueuedId] = useState<string | null>(null);
+  const submitting = useRef(false);
+  const activeJob = store.jobs.find((job) => !isTerminalJob(job) && job.state !== "queued");
+  const totalUs = store.taskClips.reduce((total, clip) => total + clip.endUs - clip.startUs, 0);
 
   useEffect(() => {
     setPlayerError(false);
@@ -218,20 +220,23 @@ function EditorPage(): React.JSX.Element {
   }
 
   async function exportVideo(): Promise<void> {
+    if (submitting.current) return;
+    submitting.current = true;
     store.setError(null);
     setAction("validating");
     try {
-      await window.videoQuickEditor.planExport(store.createRequest());
-      await window.videoQuickEditor.startExport(store.createRequest());
-      await router.navigate({ to: "/exports" });
+      const request = await store.createRequest();
+      const job = await window.videoQuickEditor.startExport(request);
+      setQueuedId(job.id);
     } catch (error) {
       store.setError(message(error));
     }
+    submitting.current = false;
     setAction(null);
   }
 
   return (
-    <div className="grid min-h-[calc(100vh-72px)] grid-cols-[340px_minmax(440px,1fr)_340px] pb-[86px] max-[1200px]:grid-cols-[300px_minmax(400px,1fr)_300px]">
+    <div className="grid min-h-[calc(100vh-72px)] grid-cols-[300px_minmax(0,1fr)_300px] pb-[120px] max-[1100px]:grid-cols-[250px_minmax(0,1fr)]">
       {store.error && (
         <div className="fixed top-[82px] left-1/2 z-50 flex max-w-[720px] -translate-x-1/2 gap-5 rounded-[10px] border border-[#803139] bg-[#491e22] px-4 py-3 text-[#ffd6d9] shadow-[0_15px_50px_#000] [&_button]:border-0 [&_button]:bg-transparent [&_button]:text-lg [&_button]:text-inherit">
           <span>{store.error}</span>
@@ -245,7 +250,7 @@ function EditorPage(): React.JSX.Element {
               01 · {isCombine ? copy.combineOrder : copy.trimMedia}
             </span>
             <h2>
-              {isCombine ? copy.combineTimeline : copy.clipToTrim} <b>{store.clips.length}</b>
+              {copy.mediaLibrary} <b>{store.assetCount}</b>
             </h2>
           </div>
           <button
@@ -256,32 +261,78 @@ function EditorPage(): React.JSX.Element {
             ＋
           </button>
         </div>
-        <div className="mb-3 grid grid-cols-2 gap-2">
-          <div
-            className={`flex min-w-0 flex-col gap-[3px] rounded-[10px] border p-[10px] ${
-              !isCombine
-                ? "border-primary-border bg-secondary text-primary"
-                : "border-white/[0.05] bg-[#0d131a] text-[#65727e]"
-            }`}
-          >
-            <b className="text-[11px]">✂ {copy.trim}</b>
-            <small className="text-[8px] leading-[1.4] text-[#6f7e89]">
-              {copy.trimDescription}
-            </small>
-          </div>
-          <div
-            className={`flex min-w-0 flex-col gap-[3px] rounded-[10px] border p-[10px] ${
-              isCombine
-                ? "border-primary-border bg-secondary text-primary"
-                : "border-white/[0.05] bg-[#0d131a] text-[#65727e]"
-            }`}
-          >
-            <b className="text-[11px]">⧉ {copy.combine}</b>
-            <small className="text-[8px] leading-[1.4] text-[#6f7e89]">
-              {copy.combineDescription}
-            </small>
-          </div>
+        <div role="tablist" aria-label={copy.edit} className="mb-3 grid grid-cols-2 gap-2">
+          {(["trim", "combine"] as const).map((operation) => (
+            <button
+              key={operation}
+              role="tab"
+              aria-selected={store.operation === operation}
+              tabIndex={store.operation === operation ? 0 : -1}
+              disabled={operation === "combine" && store.assetCount < 2}
+              onClick={() => store.setOperation(operation)}
+              onKeyDown={(event) => {
+                if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+                  event.preventDefault();
+                  const next =
+                    event.key === "Home"
+                      ? "trim"
+                      : event.key === "End"
+                        ? "combine"
+                        : operation === "trim"
+                          ? "combine"
+                          : "trim";
+                  if (next === "combine" && store.assetCount < 2) return;
+                  store.setOperation(next);
+                  const buttons = event.currentTarget.parentElement?.querySelectorAll("button");
+                  buttons?.[next === "trim" ? 0 : 1]?.focus();
+                }
+              }}
+              className={store.operation === operation ? primaryButtonClass : secondaryButtonClass}
+            >
+              {operation === "trim" ? `✂ ${copy.trim}` : `⧉ ${copy.combine}`}
+            </button>
+          ))}
         </div>
+        {store.assetCount < 2 && (
+          <p className="mb-3 text-xs text-[#9ba8b3]">{copy.combineMinimum}</p>
+        )}
+        {isCombine && (
+          <div className="my-3 flex flex-wrap gap-2 text-xs">
+            <span>
+              {copy.selected}: {store.combineClipIds.length}
+            </span>
+            {(store.assetCount >= 3 || store.taskClips.length < 2) && (
+              <>
+                <button onClick={() => store.selectAllCombine(true)}>{copy.selectAllClips}</button>
+                <button onClick={() => store.selectAllCombine(false)}>{copy.clearSelection}</button>
+              </>
+            )}
+            {store.taskClips.length < 2 && <p>{copy.selectMinimum}</p>}
+            <ol className="w-full" aria-label={copy.combineOrder}>
+              {store.taskClips.map((clip, index) => (
+                <li key={clip.id} className="my-2 flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate">
+                    {index + 1}. {store.assets.find((a) => a.id === clip.assetId)?.fileName}
+                  </span>
+                  <button
+                    aria-label={`${copy.moveUp} ${index + 1}`}
+                    disabled={index === 0}
+                    onClick={() => store.moveCombine(clip.id, -1)}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    aria-label={`${copy.moveDown} ${index + 1}`}
+                    disabled={index === store.taskClips.length - 1}
+                    onClick={() => store.moveCombine(clip.id, 1)}
+                  >
+                    ↓
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
         <button
           className="flex h-[105px] w-full flex-col items-center justify-center gap-[5px] rounded-[13px] border border-dashed border-primary-border bg-secondary text-[#ccd8dd] [&>small]:text-[10px] [&>small]:text-[#71808c] [&>span]:text-xl [&>span]:text-primary [&>strong]:text-[13px]"
           disabled={store.dependencies.status !== "ready"}
@@ -294,13 +345,7 @@ function EditorPage(): React.JSX.Element {
           }}
         >
           <span>＋</span>
-          <strong>
-            {store.clips.length === 0
-              ? copy.addLocalVideo
-              : isCombine
-                ? copy.continueCombination
-                : copy.startCombination}
-          </strong>
+          <strong>{copy.addLocalVideo}</strong>
           <small>{copy.supportedFormats}</small>
         </button>
         {store.busy && (
@@ -313,7 +358,8 @@ function EditorPage(): React.JSX.Element {
         )}
         <div className="mt-4 flex max-h-[calc(100vh-282px)] flex-col gap-[9px] overflow-auto pr-1">
           {store.clips.map((clip, index) => {
-            const clipAsset = store.assets.find((item) => item.id === clip.assetId)!;
+            const clipAsset = store.assets.find((item) => item.id === clip.assetId);
+            if (!clipAsset) return null;
             return (
               <article
                 key={clip.id}
@@ -328,15 +374,21 @@ function EditorPage(): React.JSX.Element {
                   clip.id === store.selectedClipId
                     ? "border-primary bg-secondary shadow-[0_0_0_1px_var(--color-secondary)]"
                     : "border-white/[0.05] bg-[#10161e]"
-                } ${
-                  isCombine && index < store.clips.length - 1
-                    ? "after:absolute after:bottom-[-15px] after:left-[18px] after:z-[2] after:font-mono after:text-[10px] after:font-bold after:text-primary after:content-['↓']"
-                    : ""
                 }`}
                 onClick={() => store.selectClip(clip.id)}
               >
-                <div className="font-mono text-[10px] font-semibold text-[#63717f] [writing-mode:vertical-rl]">
-                  {String(index + 1).padStart(2, "0")}
+                <div>
+                  {isCombine && store.assetCount >= 3 ? (
+                    <input
+                      type="checkbox"
+                      aria-label={`${copy.combine} ${clipAsset.fileName} ${index + 1}`}
+                      checked={store.combineClipIds.includes(clip.id)}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={() => store.toggleCombine(clip.id)}
+                    />
+                  ) : (
+                    String(index + 1).padStart(2, "0")
+                  )}
                 </div>
                 <video
                   className="h-12 w-[70px] rounded-[7px] bg-[#05070a] object-cover"
@@ -358,7 +410,7 @@ function EditorPage(): React.JSX.Element {
                     {formatUs(clip.endUs - clip.startUs)} {copy.selected}
                   </small>
                 </div>
-                <div className="absolute top-[3px] right-1 hidden rounded-[7px] bg-[#10161eee] group-hover:flex [&_button]:border-0 [&_button]:bg-transparent [&_button]:p-1 [&_button]:text-[#b6c0c8]">
+                <div className="col-span-3 flex justify-end rounded-[7px] bg-[#10161eee] [&_button]:border-0 [&_button]:bg-transparent [&_button]:p-1 [&_button]:text-[#b6c0c8]">
                   <button
                     title={copy.moveUp}
                     onClick={(event) => {
@@ -526,7 +578,7 @@ function EditorPage(): React.JSX.Element {
       </section>
 
       <section
-        className={`${panelClass} border-r-0 bg-[#0b0f15] [&_fieldset]:m-0 [&_fieldset]:border-0 [&_fieldset]:p-0 [&_fieldset:disabled]:opacity-40 [&_hr]:my-[18px] [&_hr]:border-0 [&_hr]:border-t [&_hr]:border-white/[0.05] [&_label]:mb-[13px] [&_label]:block [&_label]:text-[10px] [&_label]:font-bold [&_label]:tracking-[0.04em] [&_label]:text-[#7f8c99] [&_input:not([type='checkbox'])]:mt-1.5 [&_input:not([type='checkbox'])]:block [&_input:not([type='checkbox'])]:w-full [&_input:not([type='checkbox'])]:rounded-lg [&_input:not([type='checkbox'])]:border [&_input:not([type='checkbox'])]:border-white/[0.07] [&_input:not([type='checkbox'])]:bg-[#101720] [&_input:not([type='checkbox'])]:p-[9px] [&_input:not([type='checkbox'])]:text-[#e5eaee] [&_select]:mt-1.5 [&_select]:block [&_select]:w-full [&_select]:rounded-lg [&_select]:border [&_select]:border-white/[0.07] [&_select]:bg-[#101720] [&_select]:p-[9px] [&_select]:text-[#e5eaee] [&_textarea]:mt-1.5 [&_textarea]:block [&_textarea]:w-full [&_textarea]:resize-none [&_textarea]:rounded-lg [&_textarea]:border [&_textarea]:border-white/[0.07] [&_textarea]:bg-[#101720] [&_textarea]:p-[9px] [&_textarea]:text-[#e5eaee]`}
+        className={`${panelClass} border-r-0 bg-[#0b0f15] max-[1100px]:col-span-2 [&_fieldset]:m-0 [&_fieldset]:border-0 [&_fieldset]:p-0 [&_fieldset:disabled]:opacity-40 [&_hr]:my-[18px] [&_hr]:border-0 [&_hr]:border-t [&_hr]:border-white/[0.05] [&_label]:mb-[13px] [&_label]:block [&_label]:text-[10px] [&_label]:font-bold [&_label]:tracking-[0.04em] [&_label]:text-[#7f8c99] [&_input:not([type='checkbox'])]:mt-1.5 [&_input:not([type='checkbox'])]:block [&_input:not([type='checkbox'])]:w-full [&_input:not([type='checkbox'])]:rounded-lg [&_input:not([type='checkbox'])]:border [&_input:not([type='checkbox'])]:border-white/[0.07] [&_input:not([type='checkbox'])]:bg-[#101720] [&_input:not([type='checkbox'])]:p-[9px] [&_input:not([type='checkbox'])]:text-[#e5eaee] [&_select]:mt-1.5 [&_select]:block [&_select]:w-full [&_select]:rounded-lg [&_select]:border [&_select]:border-white/[0.07] [&_select]:bg-[#101720] [&_select]:p-[9px] [&_select]:text-[#e5eaee] [&_textarea]:mt-1.5 [&_textarea]:block [&_textarea]:w-full [&_textarea]:resize-none [&_textarea]:rounded-lg [&_textarea]:border [&_textarea]:border-white/[0.07] [&_textarea]:bg-[#101720] [&_textarea]:p-[9px] [&_textarea]:text-[#e5eaee]`}
       >
         <div className={panelTitleClass}>
           <div>
@@ -730,70 +782,46 @@ function EditorPage(): React.JSX.Element {
         </label>
       </section>
 
-      <footer className="fixed right-0 bottom-0 left-0 z-10 flex h-[76px] items-center gap-[30px] border-t border-white/[0.07] bg-[#0b1016eb] px-7 backdrop-blur-[18px]">
+      <footer className="fixed right-0 bottom-0 left-0 z-10 flex min-h-[76px] flex-wrap items-center gap-4 py-3 border-t border-white/[0.07] bg-[#0b1016eb] px-7 backdrop-blur-[18px]">
         <div className="flex flex-col">
-          <strong className="text-[17px]">{store.clips.length}</strong>
+          <strong className="text-[17px]">{store.taskClips.length}</strong>
           <span className="text-[9px] text-[#71808c]">{copy.clips}</span>
         </div>
         <div className="flex flex-col">
           <strong className="text-[17px]">{formatUs(totalUs)}</strong>
           <span className="text-[9px] text-[#71808c]">{copy.totalSelectedDuration}</span>
         </div>
-        {activeJob ? (
-          <>
-            <div className="flex flex-1 flex-col gap-[7px]">
-              <span className="text-[9px] text-[#71808c]">
-                {jobStateLabel(activeJob, language)} · {jobPhaseLabel(activeJob.phase, language)}
-              </span>
-              <div className={progressClass}>
-                <i style={{ width: `${(activeJob.progress ?? 0) * 100}%` }} />
-              </div>
-            </div>
-            <strong className="min-w-14 text-right font-mono text-[15px] font-bold text-primary">
+        <div className="min-w-0 flex-1 text-xs text-[#9ba8b3]">
+          {queuedId && (
+            <p role="status">
+              {copy.queuedNotice} · {queuedId}
+            </p>
+          )}
+          {activeJob && (
+            <p>
+              {jobStateLabel(activeJob, language)} · {jobPhaseLabel(activeJob.phase, language)} ·{" "}
               {formatProgress(activeJob.progress)}
-            </strong>
-            <button
-              className={`${secondaryButtonClass} border-[#6f3138] bg-[#32171a] text-[#ff9ca5]`}
-              disabled={activeJob.state === "cancelling"}
-              onClick={() =>
-                void window.videoQuickEditor
-                  .cancelExport(activeJob.id)
-                  .catch((error: unknown) => store.setError(message(error)))
-              }
-            >
-              {copy.cancel}
-            </button>
-            <button
-              className={primaryButtonClass}
-              onClick={() => void router.navigate({ to: "/exports" })}
-            >
-              {copy.viewProgress} <b>→</b>
-            </button>
-          </>
-        ) : (
-          <>
-            <div className="flex flex-1 flex-col">
-              <span className="text-[9px] text-[#71808c]">
-                {action
-                  ? {
-                      proxy: copy.generatingProxy,
-                      frame: copy.renderingFrame,
-                      validating: copy.validatingExport,
-                    }[action]
-                  : (store.output?.displayPath ?? copy.defaultDownloads)}
-              </span>
-            </div>
-            <button
-              className={primaryButtonClass}
-              disabled={
-                !store.clips.length || action !== null || store.dependencies.status !== "ready"
-              }
-              onClick={() => void exportVideo()}
-            >
-              {isCombine ? copy.startCombine : copy.startTrim} <b>→</b>
-            </button>
-          </>
-        )}
+            </p>
+          )}
+          {isCombine && store.taskClips.length < 2 && <p>{copy.selectMinimum}</p>}
+        </div>
+        <button
+          className={secondaryButtonClass}
+          onClick={() => void router.navigate({ to: "/exports" })}
+        >
+          {copy.exportQueue}
+        </button>
+        <button
+          className={primaryButtonClass}
+          disabled={
+            store.taskClips.length < (isCombine ? 2 : 1) ||
+            action === "validating" ||
+            store.dependencies.status !== "ready"
+          }
+          onClick={() => void exportVideo()}
+        >
+          {isCombine ? copy.startCombine : copy.startTrim} <b>→</b>
+        </button>
       </footer>
     </div>
   );
@@ -898,10 +926,24 @@ function ClipEditor({
 }
 
 function ExportsPage(): React.JSX.Element {
-  const { jobs, settings, setError } = useStore();
+  const { jobs, settings, setError, error } = useStore();
   const language = settings?.language ?? "en";
   const copy = copyFor(language);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const retrying = useRef(false);
+  const [retryPending, setRetryPending] = useState(false);
+  async function retry(jobId: string): Promise<void> {
+    if (retrying.current) return;
+    retrying.current = true;
+    setRetryPending(true);
+    try {
+      await window.videoQuickEditor.retryExport(jobId, crypto.randomUUID());
+    } catch (error) {
+      setError(message(error));
+    }
+    retrying.current = false;
+    setRetryPending(false);
+  }
   const deletableJobs = jobs.filter(isTerminalJob);
   const allSelected =
     deletableJobs.length > 0 && deletableJobs.every((job) => selectedIds.includes(job.id));
@@ -935,6 +977,11 @@ function ExportsPage(): React.JSX.Element {
         <h1 className="my-2 text-4xl tracking-[-0.04em]">{copy.exportQueue}</h1>
         <p className="mt-0 mb-[35px] text-[#778592]">{copy.exportQueueDescription}</p>
       </div>
+      {error && (
+        <p role="alert" className="my-3 text-[#ff9da5]">
+          {error}
+        </p>
+      )}
       {jobs.length === 0 ? (
         <div className={surfaceCardClass}>{copy.noJobs}</div>
       ) : (
@@ -962,7 +1009,10 @@ function ExportsPage(): React.JSX.Element {
             </button>
           </div>
           <div className="flex flex-col gap-3">
-            {jobs.map((job) => (
+            {[
+              ...jobs.filter((j) => !isTerminalJob(j)),
+              ...jobs.filter(isTerminalJob).reverse(),
+            ].map((job) => (
               <article
                 className="grid grid-cols-[22px_105px_1fr_auto] gap-4 rounded-[14px] border border-white/[0.06] bg-panel p-5"
                 key={job.id}
@@ -991,18 +1041,41 @@ function ExportsPage(): React.JSX.Element {
                 </div>
                 <div className="flex flex-col gap-[7px]">
                   <strong>
-                    {jobKind(job, language)} · {job.request.clips.length} {copy.clips}
+                    {jobKind(job, language)} · {job.request.clips.length} {copy.clips} ·{" "}
+                    {formatUs(
+                      job.request.clips.reduce(
+                        (total, clip) => total + clip.endUs - clip.startUs,
+                        0,
+                      ),
+                    )}
                   </strong>
                   <span className="text-[11px] text-[#7b8994]">
                     {jobPhaseLabel(job.phase, language)}
                   </span>
-                  {job.error && <p className="text-[11px] text-[#ff9da5]">{job.error}</p>}
-                  <div className={progressClass}>
-                    <i style={{ width: `${(job.progress ?? 0) * 100}%` }} />
-                  </div>
-                  <small className="font-mono text-sm font-bold text-primary">
-                    {formatProgress(job.progress)}
+                  <small>
+                    {job.id} · {new Date(job.createdAt).toLocaleString(language)}
                   </small>
+                  <small>
+                    {job.clipNames?.join(" → ")} · {job.outputName}
+                  </small>
+                  {job.state === "queued" && (
+                    <small>
+                      {copy.waitingPosition}:{" "}
+                      {jobs.filter((j) => j.state === "queued").findIndex((j) => j.id === job.id) +
+                        1}
+                    </small>
+                  )}
+                  {job.error && <p className="text-[11px] text-[#ff9da5]">{job.error}</p>}
+                  {job.state !== "queued" && (
+                    <>
+                      <div className={progressClass}>
+                        <i style={{ width: `${(job.progress ?? 0) * 100}%` }} />
+                      </div>
+                      <small className="font-mono text-sm font-bold text-primary">
+                        {formatProgress(job.progress)}
+                      </small>
+                    </>
+                  )}
                   {job.resultPath && (
                     <code className="mt-[5px] text-[10px] text-[#aeb9c1]">{job.resultPath}</code>
                   )}
@@ -1018,6 +1091,11 @@ function ExportsPage(): React.JSX.Element {
                       }
                     >
                       {copy.cancel}
+                    </button>
+                  )}
+                  {job.state === "failed" && (
+                    <button disabled={retryPending} onClick={() => void retry(job.id)}>
+                      {copy.retryJob}
                     </button>
                   )}
                   {job.state === "completed" && (

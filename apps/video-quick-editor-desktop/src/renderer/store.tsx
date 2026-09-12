@@ -22,6 +22,8 @@ import type {
 
 interface EditorState {
   assets: AssetView[];
+  operation: "trim" | "combine";
+  combineClipIds: string[];
   clips: ClipSpec[];
   selectedClipId: string | null;
   mode: ExportRequest["mode"];
@@ -39,6 +41,12 @@ interface EditorState {
 }
 
 interface Store extends EditorState {
+  taskClips: ClipSpec[];
+  assetCount: number;
+  setOperation: (operation: "trim" | "combine") => void;
+  toggleCombine: (id: string) => void;
+  selectAllCombine: (all: boolean) => void;
+  moveCombine: (id: string, delta: number) => void;
   selectedClip: ClipSpec | null;
   selectedAsset: AssetView | null;
   importWithDialog: () => Promise<void>;
@@ -59,7 +67,7 @@ interface Store extends EditorState {
   setNormalize: (update: Partial<ExportRequest["normalize"]>) => void;
   setSettings: (settings: Settings) => void;
   setError: (error: string | null) => void;
-  createRequest: () => ExportRequest;
+  createRequest: () => Promise<ExportRequest>;
 }
 
 const Context = createContext<Store | null>(null);
@@ -77,6 +85,8 @@ const initialWatermark: WatermarkSpec = {
 export function StoreProvider({ children }: PropsWithChildren): React.JSX.Element {
   const [state, setState] = useState<EditorState>({
     assets: [],
+    operation: "trim",
+    combineClipIds: [],
     clips: [],
     selectedClipId: null,
     mode: "accurate",
@@ -101,6 +111,8 @@ export function StoreProvider({ children }: PropsWithChildren): React.JSX.Elemen
       ...s,
       ...draft.request,
       selectedClipId: draft.selectedClipId,
+      operation: draft.operation,
+      combineClipIds: draft.combineClipIds,
       modeManual: draft.request.modeWasManuallySelected,
     }));
   }, []);
@@ -116,6 +128,10 @@ export function StoreProvider({ children }: PropsWithChildren): React.JSX.Elemen
               expectedRevision: before.revision,
               request: draft.request,
               selectedClipId: draft.selectedClipId,
+              operation: draft.operation,
+              combineClipIds: draft.combineClipIds,
+              combineInitialized: draft.combineInitialized,
+              combineOrderCustomized: draft.combineOrderCustomized,
             }),
           );
         })
@@ -141,10 +157,11 @@ export function StoreProvider({ children }: PropsWithChildren): React.JSX.Elemen
       window.videoQuickEditor.getDraft(),
       window.videoQuickEditor.getJobs(),
       window.videoQuickEditor.getSettings(),
+      window.videoQuickEditor.getAssets(),
     ])
-      .then(([draft, jobs, settings]) => {
+      .then(([draft, jobs, settings, assets]) => {
         receive(draft);
-        setState((s) => ({ ...s, jobs, settings }));
+        setState((s) => ({ ...s, jobs, settings, assets }));
         if (!draft.request.watermark.fontId && settings.defaultFontId)
           mutate((d) => {
             d.request.watermark.fontId = settings.defaultFontId;
@@ -184,6 +201,12 @@ export function StoreProvider({ children }: PropsWithChildren): React.JSX.Elemen
     },
     [mutate],
   );
+  useEffect(() => {
+    if (state.clips.some((c) => !state.assets.some((a) => a.id === c.assetId)))
+      void window.videoQuickEditor
+        .getAssets()
+        .then((assets) => setState((s) => ({ ...s, assets })));
+  }, [state.clips, state.assets]);
   const store = useMemo<Store>(() => {
     const selectedClip = state.clips.find((c) => c.id === state.selectedClipId) ?? null;
     const move = (sourceId: string, targetId: string) =>
@@ -196,6 +219,70 @@ export function StoreProvider({ children }: PropsWithChildren): React.JSX.Elemen
       });
     return {
       ...state,
+      assetCount: new Set(state.clips.map((c) => c.assetId)).size,
+      taskClips:
+        state.operation === "trim"
+          ? selectedClip
+            ? [selectedClip]
+            : []
+          : state.combineClipIds.flatMap((id) => {
+              const c = state.clips.find((c) => c.id === id);
+              return c ? [c] : [];
+            }),
+      setOperation: (operation) =>
+        mutate((d) => {
+          if (operation === "combine" && new Set(d.request.clips.map((c) => c.assetId)).size < 2)
+            return;
+          d.operation = operation;
+          if (operation === "combine" && !d.combineInitialized) {
+            d.combineInitialized = true;
+            if (new Set(d.request.clips.map((c) => c.assetId)).size === 2)
+              d.combineClipIds = d.request.clips
+                .filter(
+                  (c, index, clips) =>
+                    clips.findIndex((other) => other.assetId === c.assetId) === index,
+                )
+                .map((c) => c.id);
+          }
+        }),
+      toggleCombine: (id) =>
+        mutate((d) => {
+          if (d.combineClipIds.includes(id)) d.combineOrderCustomized = true;
+          d.combineClipIds = d.combineClipIds.includes(id)
+            ? d.combineClipIds.filter((c) => c !== id)
+            : [...d.combineClipIds, id];
+          if (!d.combineOrderCustomized)
+            d.combineClipIds.sort(
+              (a, b) =>
+                d.request.clips.findIndex((c) => c.id === a) -
+                d.request.clips.findIndex((c) => c.id === b),
+            );
+        }),
+      selectAllCombine: (all) =>
+        mutate((d) => {
+          if (!all) d.combineOrderCustomized = false;
+          d.combineClipIds = all
+            ? [
+                ...d.combineClipIds,
+                ...d.request.clips.filter((c) => !d.combineClipIds.includes(c.id)).map((c) => c.id),
+              ]
+            : [];
+          if (!d.combineOrderCustomized)
+            d.combineClipIds.sort(
+              (a, b) =>
+                d.request.clips.findIndex((c) => c.id === a) -
+                d.request.clips.findIndex((c) => c.id === b),
+            );
+        }),
+      moveCombine: (id, delta) =>
+        mutate((d) => {
+          const from = d.combineClipIds.indexOf(id),
+            to = from + delta;
+          if (from < 0 || to < 0 || to >= d.combineClipIds.length) return;
+          d.combineOrderCustomized = true;
+          d.combineClipIds.splice(from, 1);
+          d.combineClipIds.splice(to, 0, id);
+        }),
       selectedClip,
       watermark: selectedClip?.watermark ?? state.watermark,
       selectedAsset: state.assets.find((a) => a.id === selectedClip?.assetId) ?? null,
@@ -284,16 +371,26 @@ export function StoreProvider({ children }: PropsWithChildren): React.JSX.Elemen
         }),
       setSettings: (settings) => setState((s) => ({ ...s, settings })),
       setError: (error) => setState((s) => ({ ...s, error })),
-      createRequest: () => ({
-        clips: state.clips,
-        mode: state.mode,
-        modeWasManuallySelected: state.modeManual,
-        outputProfile: state.outputProfile,
-        watermark: state.watermark,
-        output: state.output,
-        videoCodec: state.videoCodec,
-        normalize: state.normalize,
-      }),
+      createRequest: async () => {
+        await queue.current;
+        const draft = await window.videoQuickEditor.getDraft();
+        const ids = draft.operation === "trim" ? [draft.selectedClipId] : draft.combineClipIds;
+        const clips = ids.flatMap((id) => {
+          const c = draft.request.clips.find((c) => c.id === id);
+          return c ? [c] : [];
+        });
+        return {
+          ...draft.request,
+          clips,
+          taskKind: draft.operation,
+          requestId: crypto.randomUUID(),
+          mode: draft.request.modeWasManuallySelected
+            ? draft.request.mode
+            : clips.length === 1
+              ? "accurate"
+              : "normalize",
+        };
+      },
     };
   }, [state, mutate, runImport]);
   return <Context.Provider value={store}>{children}</Context.Provider>;
