@@ -114,7 +114,14 @@ test("checks updates on demand, opens only the verified release and supports Chi
       item.click();
     });
     await expect(page.getByRole("heading", { name: "应用更新", exact: true })).toBeVisible();
+    // close() starts an asynchronous native close. Wait until the old window is
+    // gone before testing a menu click with no window, especially on CI runners.
+    const closed = page.waitForEvent("close");
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
+    await closed;
+    await expect
+      .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
+      .toBe(0);
     const newWindow = app.waitForEvent("window");
     await app.evaluate(({ Menu }) =>
       Menu.getApplicationMenu()!.getMenuItemById("check-for-updates")!.click(),

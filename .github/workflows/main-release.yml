@@ -54,6 +54,14 @@ jobs:
         run: pnpm test
       - name: Packaged Electron tests
         run: pnpm test:e2e
+      - name: Upload failed Electron test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: electron-test-failure-${{ github.run_id }}
+          path: apps/video-quick-editor-desktop/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Set incremental patch version
         run: node scripts/main-release.js prepare
       - name: Build DMG
