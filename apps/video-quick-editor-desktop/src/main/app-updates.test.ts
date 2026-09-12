@@ -116,3 +116,27 @@ it("does not let a delayed older main run change the stable/main comparison", ()
   expect(newestRelease(releases, true)?.version).toBe("0.1.0");
   expect(newestRelease([...releases].reverse(), true)?.version).toBe("0.1.0");
 });
+
+it("coalesces downloads, locks version checks and allows retries after failure", async () => {
+  let finish!: () => void;
+  const installer = vi.fn(async (_version: string, progress: (n: number) => void) => {
+    progress(0.5);
+    await new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+  });
+  const request = vi.fn<typeof fetch>().mockResolvedValue(Response.json([release("0.2.0")]));
+  const updates = new AppUpdates("0.1.0", () => {}, request, installer);
+  await expect(updates.download()).rejects.toThrow();
+  await updates.check(false);
+  const first = updates.download();
+  expect(updates.download()).toBe(first);
+  expect(updates.check(true)).toBe(first);
+  await Promise.resolve();
+  expect(updates.snapshot()).toMatchObject({ status: "downloading", downloadProgress: 0.5 });
+  finish();
+  expect(await first).toMatchObject({ status: "available", downloadProgress: 1 });
+  installer.mockRejectedValueOnce(new Error("private path"));
+  expect(await updates.download()).toMatchObject({ status: "available", error: "download-failed" });
+  expect(installer).toHaveBeenCalledTimes(2);
+});

@@ -75,6 +75,20 @@ function Shell(): React.JSX.Element {
   const copy = copyFor(language);
   const activeJob = jobs.find((job) => !isTerminalJob(job));
   useEffect(() => {
+    const unsubscribe = window.videoQuickEditor.subscribeUpdateMenu(() => {
+      void (async () => {
+        await router.navigate({ to: "/settings" });
+        const current = await window.videoQuickEditor.getAppUpdate();
+        const panel = document.getElementById("app-updates");
+        panel?.scrollIntoView({ block: "center" });
+        panel?.focus({ preventScroll: true });
+        await window.videoQuickEditor.checkAppUpdate(current.includePrereleases);
+      })().catch(() => {});
+    });
+    void window.videoQuickEditor.updateMenuReady();
+    return unsubscribe;
+  }, []);
+  useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);
   return (

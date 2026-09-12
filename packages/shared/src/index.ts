@@ -200,16 +200,20 @@ export type OutputSelection = z.infer<typeof outputSelectionSchema>;
 export const appUpdateSchema = z.object({
   currentVersion: z.string(),
   includePrereleases: z.boolean(),
-  status: z.enum(["idle", "checking", "available", "current", "error"]),
+  status: z.enum(["idle", "checking", "available", "current", "error", "downloading"]),
   latestVersion: z.string().nullable(),
   checkedAt: z.string().nullable(),
-  error: z.enum(["network", "rate-limit", "invalid-response"]).nullable(),
+  error: z.enum(["network", "rate-limit", "invalid-response", "download-failed"]).nullable(),
+  downloadProgress: z.number().min(0).max(1).nullable(),
 });
 export type AppUpdate = z.infer<typeof appUpdateSchema>;
 export interface VideoQuickEditorApi extends AgentApi {
   getAppUpdate(): Promise<AppUpdate>;
+  subscribeUpdateMenu(listener: () => void): () => void;
+  updateMenuReady(): Promise<void>;
   checkAppUpdate(includePrereleases: boolean): Promise<AppUpdate>;
   openAppUpdate(): Promise<void>;
+  downloadAppUpdate(): Promise<AppUpdate>;
   subscribeAppUpdate(listener: (state: AppUpdate) => void): () => void;
   getDependencies(): Promise<DependencyState>;
   subscribeDependencies(listener: (state: DependencyState) => void): () => void;

@@ -100,10 +100,12 @@ export class AppUpdates {
   private state: AppUpdate;
   private releaseUrl: string | null = null;
   private pending: Promise<AppUpdate> | null = null;
+  private downloading: Promise<AppUpdate> | null = null;
   constructor(
     currentVersion: string,
     private emit: (state: AppUpdate) => void,
     private request: typeof fetch = fetch,
+    private installer?: (version: string, progress: (fraction: number) => void) => Promise<void>,
   ) {
     this.state = {
       currentVersion,
@@ -111,6 +113,7 @@ export class AppUpdates {
       status: "idle",
       latestVersion: null,
       checkedAt: null,
+      downloadProgress: null,
       error: null,
     };
   }
@@ -121,6 +124,7 @@ export class AppUpdates {
     this.emit(this.snapshot());
   }
   check(includePrereleases: boolean): Promise<AppUpdate> {
+    if (this.downloading) return this.downloading;
     if (this.pending) return this.pending;
     this.pending = this.inspect(includePrereleases).finally(() => {
       this.pending = null;
@@ -133,6 +137,7 @@ export class AppUpdates {
       ...this.state,
       includePrereleases,
       status: "checking",
+      downloadProgress: null,
       latestVersion: null,
       error: null,
     };
@@ -183,6 +188,40 @@ export class AppUpdates {
     }
     this.publish();
     return this.snapshot();
+  }
+  download(): Promise<AppUpdate> {
+    if (this.downloading) return this.downloading;
+    if (this.state.status !== "available" || !this.state.latestVersion || !this.installer)
+      return Promise.reject(new Error("No verified update available"));
+    const version = this.state.latestVersion;
+    this.state = { ...this.state, status: "downloading", downloadProgress: 0, error: null };
+    this.publish();
+    this.downloading = Promise.resolve()
+      .then(() =>
+        this.installer!(version, (fraction) => {
+          this.state = { ...this.state, downloadProgress: fraction };
+          this.publish();
+        }),
+      )
+      .then(() => {
+        this.state = { ...this.state, status: "available", downloadProgress: 1 };
+      })
+      .catch(() => {
+        this.state = {
+          ...this.state,
+          status: "available",
+          downloadProgress: null,
+          error: "download-failed",
+        };
+      })
+      .then(() => {
+        this.publish();
+        return this.snapshot();
+      })
+      .finally(() => {
+        this.downloading = null;
+      });
+    return this.downloading;
   }
   async open(openExternal: (url: string) => Promise<void>): Promise<void> {
     if (this.state.status !== "available" || !this.releaseUrl)

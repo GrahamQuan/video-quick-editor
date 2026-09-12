@@ -1,3 +1,4 @@
+import { downloadInstaller } from "./update-installer.js";
 import { AppUpdates } from "./app-updates.js";
 import { ExportQueue } from "./export-queue.js";
 import { Dependencies, type ToolPaths } from "./dependencies.js";
@@ -14,6 +15,7 @@ import { mediaResponse } from "./media-response.js";
 import {
   app,
   BrowserWindow,
+  Menu,
   dialog,
   ipcMain,
   protocol,
@@ -598,11 +600,24 @@ const editor = new EditorService({
 });
 
 function installIpc(): void {
+  handle("app:update-menu-ready", () => {
+    updateMenuReady = true;
+    deliverUpdateMenu();
+  });
   const updates = new AppUpdates(
     app.getVersion(),
     (state) => mainWindow?.webContents.send("app:update-state", state),
     (...args) => fetch(...args),
+    (version, progress) =>
+      downloadInstaller(
+        version,
+        join(app.getPath("userData"), "video-quick-editor-updates"),
+        progress,
+        (path) => shell.openPath(path),
+        (...args) => fetch(...args),
+      ),
   );
+  handle("app:update-download", () => updates.download());
   handle("app:update-get", () => updates.snapshot());
   handle("app:update-check", (_event, raw) => updates.check(z.boolean().parse(raw)));
   handle("app:update-open", () => updates.open((url) => shell.openExternal(url)));
@@ -719,7 +734,10 @@ function installIpc(): void {
     const toolPathChanged = update.ffmpegPath !== undefined || update.ffprobePath !== undefined;
     if (update.ffmpegPath !== undefined) persisted.ffmpegPath = update.ffmpegPath;
     if (update.ffprobePath !== undefined) persisted.ffprobePath = update.ffprobePath;
-    if (update.language !== undefined) persisted.language = update.language;
+    if (update.language !== undefined) {
+      persisted.language = update.language;
+      installApplicationMenu();
+    }
     await saveSettings();
     if (toolPathChanged) {
       dependencies.configure({
@@ -785,7 +803,59 @@ function completedJob(raw: unknown): ExportJob {
   return job;
 }
 
+let updateMenuReady = false;
+let updateMenuPending = false;
+function deliverUpdateMenu(): void {
+  if (!updateMenuReady || !updateMenuPending || !mainWindow || mainWindow.isDestroyed()) return;
+  updateMenuPending = false;
+  mainWindow.webContents.send("app:update-menu");
+}
+function installApplicationMenu(): void {
+  const zh = persisted.language === "zh-CN";
+  const name = "Video Quick Editor";
+  app.setAboutPanelOptions({ applicationName: name, applicationVersion: app.getVersion() });
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      {
+        label: name,
+        submenu: [
+          { role: "about", label: zh ? `关于 ${name}` : `About ${name}` },
+          {
+            id: "check-for-updates",
+            label: zh ? "检查更新…" : "Check for Updates…",
+            click: () => {
+              updateMenuPending = true;
+              if (!mainWindow || mainWindow.isDestroyed()) {
+                void createWindow();
+              } else {
+                if (mainWindow.isMinimized()) mainWindow.restore();
+                mainWindow.show();
+                mainWindow.focus();
+                deliverUpdateMenu();
+              }
+            },
+          },
+          { type: "separator" },
+          { role: "services" },
+          { type: "separator" },
+          { role: "hide", label: zh ? `隐藏 ${name}` : `Hide ${name}` },
+          { role: "hideOthers" },
+          { role: "unhide" },
+          { type: "separator" },
+          { role: "quit", label: zh ? `退出 ${name}` : `Quit ${name}` },
+        ],
+      },
+      { role: "fileMenu" },
+      { role: "editMenu" },
+      { role: "viewMenu" },
+      { role: "windowMenu" },
+      { role: "help", submenu: [] },
+    ]),
+  );
+}
+
 async function createWindow(): Promise<void> {
+  updateMenuReady = false;
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -800,6 +870,9 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) updateMenuReady = false;
+  });
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (url !== mainWindow?.webContents.getURL()) event.preventDefault();
   });
@@ -852,6 +925,7 @@ void app.whenReady().then(async () => {
     return await mediaResponse(request, path);
   });
   installIpc();
+  installApplicationMenu();
   await createWindow();
   void checkTools();
   app.on("activate", () => {

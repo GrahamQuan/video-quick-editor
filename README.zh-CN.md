@@ -73,13 +73,15 @@
 
 ## 更新应用
 
+在 macOS 顶部应用菜单中，点击 **关于 Video Quick Editor** 下方的 **检查更新…**，即可打开更新页并检查新版。
+
 每次推送 `main`，检查通过后自动发布一个末位递增的版本，例如 `0.1.1`、`0.1.2`。旧的 `-main.N` 预发布包仍保留在发布历史中。
 
 在 **设置 → 应用更新 → 检查更新** 中查看新版。正式版默认检查正式版；想体验开发版本，可以勾选“包含预发布版本”。
 
-发现新版后，点击“打开 GitHub 下载页”，下载 DMG。等待导出完成，退出应用，再替换 Applications 中的旧版。设置和模型配置会保留。
+发现新版后，点击“下载并打开安装包”。应用会显示下载进度，校验 DMG 后自动打开。等待导出完成，退出应用，再替换 Applications 中的旧版。设置和模型配置会保留。
 
-应用不会自动下载安装。旧版若没有更新入口，可直接访问 [GitHub Releases](https://github.com/GrahamQuan/video-quick-editor/releases)。
+下载仅在点击后开始，安装仍需手动替换；也可打开 GitHub 下载页。旧版若没有更新入口，可直接访问 [GitHub Releases](https://github.com/GrahamQuan/video-quick-editor/releases)。
 
 ## 常见问题
 

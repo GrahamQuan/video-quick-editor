@@ -40,15 +40,27 @@ export function AppUpdateSettings() {
       setFailed(true);
     }
   }
-  const busy = !state || state.status === "checking";
+  async function download() {
+    setFailed(false);
+    try {
+      setState(await window.videoQuickEditor.downloadAppUpdate());
+    } catch {
+      setFailed(true);
+    }
+  }
+  const busy = !state || state.status === "checking" || state.status === "downloading";
   const error =
-    state?.error === "rate-limit"
-      ? copy.updateRateLimit
-      : state?.error === "invalid-response"
-        ? copy.updateInvalid
-        : copy.updateNetwork;
+    state?.error === "download-failed"
+      ? copy.updateDownloadFailed
+      : state?.error === "rate-limit"
+        ? copy.updateRateLimit
+        : state?.error === "invalid-response"
+          ? copy.updateInvalid
+          : copy.updateNetwork;
   return (
     <section
+      id="app-updates"
+      tabIndex={-1}
       aria-label={copy.appUpdates}
       className="mb-4 rounded-2xl border border-white/10 bg-panel p-7 text-sm text-slate-300"
     >
@@ -75,6 +87,14 @@ export function AppUpdateSettings() {
         </button>
         {state?.status === "available" && (
           <button
+            className="rounded-lg bg-primary px-4 py-2 font-bold text-black"
+            onClick={() => void download()}
+          >
+            {copy.updateInstaller}
+          </button>
+        )}
+        {state?.status === "available" && (
+          <button
             className="rounded-lg bg-secondary px-4 py-2 text-primary"
             onClick={() => void open()}
           >
@@ -82,6 +102,25 @@ export function AppUpdateSettings() {
           </button>
         )}
       </div>
+      {state?.status === "downloading" && (
+        <div className="mt-3">
+          <label className="flex justify-between" htmlFor="update-progress">
+            {copy.updateDownloading}
+            <span>{Math.floor((state.downloadProgress ?? 0) * 100)}%</span>
+          </label>
+          <progress
+            id="update-progress"
+            className="mt-2 w-full accent-primary"
+            max={1}
+            value={state.downloadProgress ?? 0}
+          />
+        </div>
+      )}
+      {state?.status === "available" && state.downloadProgress === 1 && (
+        <p role="status" className="text-primary">
+          {copy.updateInstallerOpened}
+        </p>
+      )}
       <div role="status" className="mt-3 text-primary">
         {state?.status === "available"
           ? `${copy.updateAvailable}: ${state.latestVersion}`
@@ -89,7 +128,7 @@ export function AppUpdateSettings() {
             ? copy.updateCurrent
             : ""}
       </div>
-      {(failed || state?.status === "error") && (
+      {(failed || state?.error) && (
         <p role="alert" className="text-red-300">
           {failed ? copy.updateOpenFailed : error}
         </p>
