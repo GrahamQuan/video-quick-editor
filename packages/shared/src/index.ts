@@ -177,7 +177,20 @@ export type Settings = z.infer<typeof settingsSchema>;
 export type Language = z.infer<typeof languageSchema>;
 export type OutputSelection = z.infer<typeof outputSelectionSchema>;
 
+export const appUpdateSchema = z.object({
+  currentVersion: z.string(),
+  includePrereleases: z.boolean(),
+  status: z.enum(["idle", "checking", "available", "current", "error"]),
+  latestVersion: z.string().nullable(),
+  checkedAt: z.string().nullable(),
+  error: z.enum(["network", "rate-limit", "invalid-response"]).nullable(),
+});
+export type AppUpdate = z.infer<typeof appUpdateSchema>;
 export interface VideoQuickEditorApi extends AgentApi {
+  getAppUpdate(): Promise<AppUpdate>;
+  checkAppUpdate(includePrereleases: boolean): Promise<AppUpdate>;
+  openAppUpdate(): Promise<void>;
+  subscribeAppUpdate(listener: (state: AppUpdate) => void): () => void;
   getDependencies(): Promise<DependencyState>;
   subscribeDependencies(listener: (state: DependencyState) => void): () => void;
   chooseAssets(): Promise<AssetView[]>;

@@ -1,3 +1,4 @@
+import { AppUpdateSettings } from "./app-updates.js";
 import { TrimRange } from "./trim-range.js";
 import { AgentChat } from "./agent.js";
 import { ModelSettings } from "./model-profiles.js";
@@ -1073,6 +1074,7 @@ function SettingsPage(): React.JSX.Element {
         <p className="mt-0 mb-[35px] text-[#778592]">{copy.settingsDescription}</p>
       </div>
       <ModelSettings />
+      <AppUpdateSettings />
       <section className="mb-4 flex items-center justify-between gap-8 rounded-2xl border border-white/10 bg-panel p-7">
         <div>
           <h2 className="m-0 text-base font-bold text-white">{copy.language}</h2>

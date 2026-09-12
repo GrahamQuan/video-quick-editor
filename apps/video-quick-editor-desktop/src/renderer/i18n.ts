@@ -1,6 +1,20 @@
 import type { Language } from "@video-quick-editor/shared";
 
 const english = {
+  appUpdates: "App updates",
+  currentVersion: "Current version",
+  checkUpdate: "Check for updates",
+  checkingUpdate: "Checking for updates…",
+  includePrereleases: "Include prereleases",
+  updateAvailable: "New version available",
+  updateCurrent: "You are up to date on this channel.",
+  updateDownload: "Open GitHub download page",
+  updateHint:
+    "Checks GitHub only when requested. Download the DMG, finish any exports, quit the app, then replace it in Applications. Settings and model profiles are preserved; the current editing session is not saved across restarts.",
+  updateNetwork: "Could not reach GitHub. Check your connection and try again.",
+  updateRateLimit: "GitHub temporarily limited this request. Please try again later.",
+  updateInvalid: "No valid macOS arm64 release could be verified. Please try again later.",
+  updateOpenFailed: "Could not open the browser. Please try again.",
   models: "Models",
   modelAdd: "Add model",
   modelName: "Profile name",
@@ -174,6 +188,20 @@ export type Copy = {
 };
 
 const chinese = {
+  appUpdates: "应用更新",
+  currentVersion: "当前版本",
+  checkUpdate: "检查更新",
+  checkingUpdate: "正在检查更新…",
+  includePrereleases: "包含预发布版本",
+  updateAvailable: "发现新版本",
+  updateCurrent: "当前已是此渠道的最新版本。",
+  updateDownload: "打开 GitHub 下载页",
+  updateHint:
+    "仅在主动检查时连接 GitHub。下载 DMG，等待导出完成，退出应用后替换 Applications 中的旧版。设置和模型配置会保留；当前编辑会话不会跨重启保存。",
+  updateNetwork: "无法连接 GitHub，请检查网络后重试。",
+  updateRateLimit: "GitHub 暂时限制了请求，请稍后重试。",
+  updateInvalid: "未能验证可用的 macOS arm64 发布包，请稍后重试。",
+  updateOpenFailed: "无法打开浏览器，请重试。",
   models: "模型配置",
   modelAdd: "新增模型",
   modelName: "配置名称",

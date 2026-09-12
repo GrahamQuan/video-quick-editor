@@ -49,6 +49,12 @@ Each run publishes a separate prerelease such as `v0.1.0-main.12`, where `0.1.0`
 
 Releases remain drafts until both the DMG and `SHA256SUMS.txt` have uploaded and GitHub reports matching sizes and SHA-256 digests. A failed upload can resume from the draft. A published release is left untouched on a retry; different content or a different source commit causes an error instead of replacement. CI artifacts are retained for 14 days. These automated packages remain ad-hoc signed and unnotarized; this workflow does not add automatic updates to the app.
 
+### Check for app updates
+
+In Settings → App updates, select **Check for updates** to query this repository's public GitHub Releases. Stable installations default to stable releases; prerelease installations include prereleases. The checkbox changes the channel for this session and checks it immediately. Versions use semantic ordering. Because main builds reuse the stable base version, switching between a stable release and a main build of that same base uses their publication dates when both are available. Only releases with a completed macOS arm64 DMG qualify. No update request runs automatically at startup, and no media, paths or model credentials are sent.
+
+When an update is available, **Open GitHub download page** opens that release in your browser. Download its DMG, finish exports, quit the app and replace the copy in Applications. Settings, model profiles and secure credentials remain in their existing locations; editing sessions are not restored after restarting. This is a manual installer update, not automatic download/restart installation. Packages remain ad-hoc signed and unnotarized, so macOS may require Open Anyway in Privacy & Security.
+
 ## Development setup
 
 - macOS Apple Silicon

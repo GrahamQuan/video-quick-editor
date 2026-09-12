@@ -1,3 +1,4 @@
+import { AppUpdates } from "./app-updates.js";
 import { Dependencies, type ToolPaths } from "./dependencies.js";
 import { resolveImportPaths } from "./import-paths.js";
 import { findDefaultFont } from "./fonts.js";
@@ -524,6 +525,14 @@ const editor = new EditorService({
 });
 
 function installIpc(): void {
+  const updates = new AppUpdates(
+    app.getVersion(),
+    (state) => mainWindow?.webContents.send("app:update-state", state),
+    (...args) => fetch(...args),
+  );
+  handle("app:update-get", () => updates.snapshot());
+  handle("app:update-check", (_event, raw) => updates.check(z.boolean().parse(raw)));
+  handle("app:update-open", () => updates.open((url) => shell.openExternal(url)));
   handle("editor:get", () => editor.snapshot());
   handle("editor:update", (_event, raw) => {
     const i = z

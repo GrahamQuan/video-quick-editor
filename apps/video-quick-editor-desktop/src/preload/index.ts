@@ -7,6 +7,11 @@ function subscribe<T>(channel: string, listener: (value: T) => void): () => void
   return () => ipcRenderer.removeListener(channel, wrapped);
 }
 const api: VideoQuickEditorApi = {
+  getAppUpdate: async () => await ipcRenderer.invoke("app:update-get"),
+  checkAppUpdate: async (includePrereleases) =>
+    await ipcRenderer.invoke("app:update-check", includePrereleases),
+  openAppUpdate: async () => await ipcRenderer.invoke("app:update-open"),
+  subscribeAppUpdate: (listener) => subscribe("app:update-state", listener),
   getDraft: async () => await ipcRenderer.invoke("editor:get"),
   updateDraft: async (input) => await ipcRenderer.invoke("editor:update", input),
   subscribeDraft: (listener) => subscribe("editor:draft", listener),
