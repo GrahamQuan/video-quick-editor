@@ -1,4 +1,4 @@
-name: Main prerelease
+name: Main release
 
 on:
   push:
@@ -54,7 +54,7 @@ jobs:
         run: pnpm test
       - name: Packaged Electron tests
         run: pnpm test:e2e
-      - name: Set unique prerelease version
+      - name: Set incremental patch version
         run: node scripts/main-release.js prepare
       - name: Build DMG
         run: pnpm package
@@ -89,7 +89,7 @@ jobs:
         with:
           name: main-release-${{ github.run_id }}
           path: release-artifacts/
-      - name: Publish verified prerelease
+      - name: Publish verified release
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/main-release.js publish

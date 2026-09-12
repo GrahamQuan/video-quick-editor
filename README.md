@@ -71,6 +71,8 @@ Video processing stays on your Mac. Online models receive text instructions, dis
 
 ## Update the app
 
+Each push to `main` produces a release after checks pass, with an incrementing patch version: `0.1.1`, `0.1.2`, and so on. Older `-main.N` prereleases remain available in the release history.
+
 Go to **Settings → App updates → Check for updates**. Stable versions check for stable releases by default; select **Include prereleases** to try development builds.
 
 When a newer version is available, select **Open GitHub download page** and download its DMG. Finish your exports, quit the app, then replace the old copy in Applications. Settings and model profiles are preserved.

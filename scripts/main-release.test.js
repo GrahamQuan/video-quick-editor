@@ -71,7 +71,16 @@ test("tag lookup handles new tags and resolves existing tags without suppressing
   );
 });
 test("main versions are unique per run and stable on reruns", () => {
-  assert.equal(releaseMetadata("0.1.0", "12", sha).tag, "v0.1.0-main.12");
+  assert.equal(releaseMetadata("0.1.0", "12", sha).tag, "v0.1.1");
+  assert.equal(releaseMetadata("0.1.0", "13", sha).tag, "v0.1.2");
+  assert.equal(releaseMetadata("0.1.0", "22", sha).tag, "v0.1.11");
+  assert.deepEqual(releaseMetadata("0.1.0", "12", sha), releaseMetadata("0.1.0", "12", sha));
+  assert.equal(
+    releaseMetadata("1.2.9", "101", sha, { baseVersion: "1.2.9", baseRunNumber: 100 }).version,
+    "1.2.10",
+  );
+  assert.throws(() => releaseMetadata("0.1.0", "11", sha), /anchor/);
+  assert.throws(() => releaseMetadata("0.2.0", "12", sha), /anchor/);
   assert.notEqual(releaseMetadata("0.1.0", "12", sha).tag, releaseMetadata("0.1.0", "13", sha).tag);
   for (const bad of ["", "../x", "v0.1.0", "0.1.0-beta"])
     assert.throws(() => releaseMetadata(bad, "12", sha));
@@ -110,18 +119,26 @@ test("publish creates a draft, verifies uploads, then publishes; reruns preserve
       lookupRelease: () => release,
       lookupTag: () => null,
       command: (_cmd, args) => {
-        operations.push(args[1]);
+        operations.push(args[0] === "api" ? "publish" : args[1]);
         if (args[1] === "create")
           release = {
+            id: 123,
             draft: true,
             target_commitish: sha,
             assets: [],
             html_url: "https://example.com/untagged-draft",
           };
+        if (args[1] === "create") assert.equal(args.includes("--prerelease"), false);
         if (args[1] === "upload") release.assets = assets;
-        if (args[1] === "edit") {
-          assert.equal(args.includes("--latest=false"), true);
-          release = { ...release, draft: false, html_url: "https://example.com/release" };
+        if (args[0] === "api") {
+          assert.equal(args.includes("make_latest=legacy"), true);
+          assert.equal(args.includes("prerelease=false"), true);
+          release = {
+            ...release,
+            draft: false,
+            prerelease: false,
+            html_url: "https://example.com/release",
+          };
         }
       },
     };
@@ -129,7 +146,7 @@ test("publish creates a draft, verifies uploads, then publishes; reruns preserve
       await publishRelease(metadata, directory, "owner/repo", api),
       "https://example.com/release",
     );
-    assert.deepEqual(operations, ["create", "upload", "edit"]);
+    assert.deepEqual(operations, ["create", "upload", "publish"]);
     operations.length = 0;
     await publishRelease(metadata, directory, "owner/repo", api);
     assert.deepEqual(operations, []);
@@ -145,7 +162,7 @@ test("publish creates a draft, verifies uploads, then publishes; reruns preserve
     release.draft = true;
     operations.length = 0;
     await publishRelease(metadata, directory, "owner/repo", api);
-    assert.deepEqual(operations, ["upload", "edit"]);
+    assert.deepEqual(operations, ["upload", "publish"]);
     release.draft = true;
     api.command = (_cmd, args) => {
       operations.push(args[1]);
@@ -186,7 +203,7 @@ test("prepare changes only the disposable checkout's desktop version", async () 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(
       JSON.parse(await readFile(join(desktop, "package.json"), "utf8")).version,
-      "0.1.0-main.42",
+      "0.1.31",
     );
     assert.deepEqual(
       JSON.parse(await readFile(join(directory, "main-release.json"), "utf8")),

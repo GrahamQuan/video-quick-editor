@@ -4,13 +4,27 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import versionAnchor from "./release-version.json" with { type: "json" };
 
 const desktop = "apps/video-quick-editor-desktop";
-export function releaseMetadata(baseVersion, runNumber, sha) {
-  if (!/^\d+\.\d+\.\d+$/.test(baseVersion)) throw new Error("Desktop version must be stable x.y.z");
+export function releaseMetadata(baseVersion, runNumber, sha, anchor = versionAnchor) {
+  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(baseVersion))
+    throw new Error("Desktop version must be stable x.y.z");
   if (!/^[1-9]\d*$/.test(runNumber)) throw new Error("Invalid workflow run number");
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("Invalid source commit");
-  const version = `${baseVersion}-main.${runNumber}`;
+  if (
+    baseVersion !== anchor.baseVersion ||
+    !Number.isSafeInteger(anchor.baseRunNumber) ||
+    anchor.baseRunNumber < 0
+  )
+    throw new Error("Desktop version and release anchor must be updated together");
+  const increment = BigInt(runNumber) - BigInt(anchor.baseRunNumber);
+  if (increment <= 0n) throw new Error("Workflow run must follow the release anchor");
+  // GitHub run numbers are unique and unchanged by retries. Mapping from the
+  // last legacy run avoids races and avoids version-only commits triggering CI.
+  // For a future major/minor bump, reset both the desktop version and this anchor.
+  const [major, minor, patch] = baseVersion.split(".");
+  const version = `${major}.${minor}.${BigInt(patch) + increment}`;
   return {
     version,
     tag: `v${version}`,
@@ -103,7 +117,6 @@ export async function publishRelease(
       "--notes-file",
       join(directory, "release-notes.md"),
       "--draft",
-      "--prerelease",
       "--latest=false",
     ]);
   }
@@ -120,18 +133,26 @@ export async function publishRelease(
   if (!release || release.target_commitish !== metadata.sha)
     throw new Error("Release changed during upload");
   verifyAssets(release.assets, files);
+  if (!Number.isSafeInteger(release.id) || release.id <= 0) throw new Error("Invalid release ID");
   api.command("gh", [
-    "release",
-    "edit",
-    metadata.tag,
-    "--repo",
-    repository,
-    "--draft=false",
-    "--prerelease",
-    "--latest=false",
+    "api",
+    "--method",
+    "PATCH",
+    `repos/${repository}/releases/${release.id}`,
+    "-F",
+    "draft=false",
+    "-F",
+    "prerelease=false",
+    "-f",
+    "make_latest=legacy",
   ]);
   const published = api.lookupRelease(repository, metadata.tag);
-  if (!published || published.draft || published.target_commitish !== metadata.sha)
+  if (
+    !published ||
+    published.draft ||
+    published.prerelease ||
+    published.target_commitish !== metadata.sha
+  )
     throw new Error("Release publication could not be verified");
   verifyAssets(published.assets, files);
   return published.html_url;
@@ -182,7 +203,7 @@ async function bundle(directory) {
   await writeFile(join(directory, "main-release.json"), JSON.stringify(metadata));
   await writeFile(
     join(directory, "release-notes.md"),
-    `Automated main build / main 自动预发布\n\nCommit: ${metadata.sha}\n\nDownload **${metadata.filename}** from Assets, open the DMG and drag the app into Applications.\n从 Assets 下载 DMG，打开后拖入 Applications。\n\n- macOS Apple Silicon (arm64) only; no Node.js/pnpm required.\n- FFmpeg/ffprobe are external dependencies and are not bundled or installed by the app.\n- Ad-hoc signed, not Developer ID signed or notarized. macOS may block launch or show security warnings.\n- 仅支持 Apple Silicon；FFmpeg/ffprobe 需另行安装；本机 ad-hoc 签名，未公证，macOS 可能阻止启动或显示安全提示。\n\nChecks: typecheck, lint, unit/media tests, Electron tests, package architecture/content and code-signature verification. Live model providers and downloaded-app Gatekeeper behavior are not verified.\n`,
+    `Automated main build / main 自动发布\n\nCommit: ${metadata.sha}\n\nDownload **${metadata.filename}** from Assets, open the DMG and drag the app into Applications.\n从 Assets 下载 DMG，打开后拖入 Applications。\n\n- macOS Apple Silicon (arm64) only; no Node.js/pnpm required.\n- FFmpeg/ffprobe are external dependencies and are not bundled or installed by the app.\n- Ad-hoc signed, not Developer ID signed or notarized. macOS may block launch or show security warnings.\n- 仅支持 Apple Silicon；FFmpeg/ffprobe 需另行安装；本机 ad-hoc 签名，未公证，macOS 可能阻止启动或显示安全提示。\n\nChecks: typecheck, lint, unit/media tests, Electron tests, package architecture/content and code-signature verification. Live model providers and downloaded-app Gatekeeper behavior are not verified.\n`,
   );
 }
 async function main() {
@@ -191,13 +212,15 @@ async function main() {
   if (operation === "bundle") return bundle(directory);
   if (operation !== "publish") throw new Error("Expected prepare, bundle or publish");
   const metadata = JSON.parse(await readFile(join(directory, "main-release.json"), "utf8"));
-  const match = /^(\d+\.\d+\.\d+)-main\.([1-9]\d*)$/.exec(metadata.version);
   if (
-    !match ||
     JSON.stringify(metadata) !==
-      JSON.stringify(
-        releaseMetadata(match[1], process.env.GITHUB_RUN_NUMBER, process.env.GITHUB_SHA),
-      )
+    JSON.stringify(
+      releaseMetadata(
+        versionAnchor.baseVersion,
+        process.env.GITHUB_RUN_NUMBER,
+        process.env.GITHUB_SHA,
+      ),
+    )
   )
     throw new Error("Artifact metadata does not match this workflow run");
   const url = await publishRelease(metadata, directory, process.env.GITHUB_REPOSITORY);
