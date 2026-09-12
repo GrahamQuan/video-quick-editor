@@ -69,7 +69,7 @@ Replace the example paths with your own. Keep quotes around paths containing spa
 - **Stop reply** stops further AI actions. Cancel already submitted exports separately on the Exports page.
 - **Clear chat** removes messages and conversation context while keeping your edits, model settings and export tasks.
 
-Video processing stays on your Mac. Online models receive text instructions, display filenames and necessary media information, never video, audio or preview images. API keys are stored encrypted locally.
+Video processing stays on your Mac. Online models receive text instructions, display filenames and necessary media information, never video, audio or preview images. API keys are stored encrypted locally. Viewing or switching model profiles does not decrypt saved keys. Using AI, testing a connection or saving a new key may request macOS Keychain authorization.
 
 ## Update the app
 

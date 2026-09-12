@@ -134,7 +134,8 @@ it("keeps old collection and credentials when atomic replacement fails", async (
       throw new Error("secret should never leak");
     });
     const unavailable = store.list();
-    expect(unavailable.profiles[0]?.hasApiKey).toBe(false);
+    expect(unavailable.profiles[0]?.hasApiKey).toBe(true);
+    expect(() => store.snapshot()).toThrow("Credential unavailable");
     expect(unavailable.profiles[1]?.hasApiKey).toBe(true);
     vi.restoreAllMocks();
   } finally {
@@ -304,6 +305,44 @@ it("a new unsaved connection test cannot inherit another profile key or alter se
     expect(store.list()).toEqual(before);
   } finally {
     vi.unstubAllGlobals();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it("loads, lists, selects and edits profiles without accessing Keychain, but checks credentials at execution", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lazy-keychain-"));
+  try {
+    const original = new ModelStore(dir);
+    await original.saveProfile({ ...config, expectedRevision: 0 });
+    const available = vi.spyOn(safeStorage, "isEncryptionAvailable").mockReturnValue(false);
+    const decrypt = vi.spyOn(safeStorage, "decryptString");
+    const store = new ModelStore(dir);
+    await store.load();
+    let view = store.list();
+    const id = view.profiles[0]!.id;
+    expect(store.view()?.hasApiKey).toBe(true);
+    view = await store.selectProfile(id, view.revision);
+    view = await store.saveProfile({
+      ...config,
+      apiKey: "",
+      id,
+      name: "Renamed",
+      expectedRevision: view.revision,
+    });
+    expect(view.profiles[0]?.hasApiKey).toBe(true);
+    expect(available).not.toHaveBeenCalled();
+    expect(decrypt).not.toHaveBeenCalled();
+    expect(() => store.snapshot()).toThrow("secure storage unavailable");
+    available.mockReturnValue(true);
+    decrypt.mockImplementationOnce(() => {
+      throw new Error("private detail");
+    });
+    expect(await store.testProfile({ ...config, apiKey: "", id })).toMatchObject({ ok: false });
+    expect(decrypt).toHaveBeenCalledTimes(1);
+    expect(store.snapshot().profile.id).toBe(id);
+    expect(decrypt).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.restoreAllMocks();
     await rm(dir, { recursive: true, force: true });
   }
 });

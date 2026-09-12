@@ -175,12 +175,9 @@ export class ModelStore {
       ...this.state,
       error: this.loadError,
       profiles: this.state.profiles.map((p) => {
-        let hasApiKey = false;
-        try {
-          hasApiKey = !!this.key(p.id);
-        } catch {
-          /* unavailable credential */
-        }
+        // Listing profiles must never unlock Keychain. Presence is not a
+        // guarantee of decryptability; execution validates the selected key.
+        const hasApiKey = !!p.credentialRef && !!this.encrypted.get(p.credentialRef)?.length;
         return modelProfileSchema.parse({ ...p, hasApiKey });
       }),
     });
@@ -203,7 +200,7 @@ export class ModelStore {
       );
     }
   }
-  private prepare(raw: ModelUpdate, id?: string) {
+  private prepare(raw: ModelUpdate, id?: string, readStoredKey = false) {
     const input = modelUpdateSchema.parse(raw);
     const config = modelConfigSchema.parse(input);
     config.baseURL = normalizeBaseURL(config.baseURL);
@@ -218,7 +215,7 @@ export class ModelStore {
       input,
       config,
       existing,
-      key: input.deleteKey ? "" : input.apiKey || (!changed ? this.key(id) : ""),
+      key: input.deleteKey ? "" : input.apiKey || (readStoredKey && !changed ? this.key(id) : ""),
     };
   }
   private mutate(expectedRevision: number, operation: () => Promise<Stored>) {
@@ -357,6 +354,7 @@ export class ModelStore {
         prepared = this.prepare(
           raw,
           raw.id ?? (exactProfile ? undefined : (this.state.selectedProfileId ?? undefined)),
+          true,
         );
       } catch {
         return {
