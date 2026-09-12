@@ -68,8 +68,8 @@ const initialWatermark: WatermarkSpec = {
   enabled: false,
   text: "",
   fontId: null,
-  position: "bottom-right",
-  fontSize: 32,
+  position: "bottom-left",
+  fontSize: 24,
   borderWidth: 1,
   margin: 24,
 };

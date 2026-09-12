@@ -88,7 +88,7 @@ Playback of the currently selected clip previews only its selected in/out range:
 
 Watermark outline thickness defaults to 1 output pixel and can be adjusted from 0–20 pixels; 0 disables the black outline. The setting applies to overlay previews, FFmpeg frame previews, and exports.
 
-Watermarks belong to the selected clip: enable, text, font, outline, position, size, and margin are independent. Switching clips restores its settings; combined exports draw each watermark only during its own clip. Duplicating a clip copies its settings, which can then be edited independently.
+Watermarks default to the bottom-left corner with a font size of 24 output pixels. Watermarks belong to the selected clip: enable, text, font, outline, position, size, and margin are independent. Switching clips restores its settings; combined exports draw each watermark only during its own clip. Duplicating a clip copies its settings, which can then be edited independently.
 
 Watermark defaults: startup preserves a readable selected font, otherwise checks macOS PingFang / Heiti files and selects one after validating a Chinese/Latin glyph sample. No font installation or download is needed. The editor shows the actual font filename and allows replacement. Preview/export still validate every glyph in the actual text and its fit; manual selection is required only if no supported system font is available.
 
