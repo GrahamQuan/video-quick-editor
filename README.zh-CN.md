@@ -6,6 +6,16 @@
 
 **[下载安装包](https://github.com/GrahamQuan/video-quick-editor/releases)** · 支持 Apple Silicon Mac（M 系列芯片）
 
+## 界面预览
+
+### 视频组合
+
+![视频组合](docs/images/video_quick_editor_merge.png)
+
+### 使用 AI Agent 自动化处理
+
+![使用 AI Agent 自动化处理](docs/images/video_quick_editor_agent.png)
+
 ## 安装与首次使用
 
 1. 在 GitHub Releases 中展开 **Assets**，下载文件名以 `mac-arm64.dmg` 结尾的安装包。标为 **Pre-release** 的版本包含较新的功能，可能还不够稳定。

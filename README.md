@@ -6,6 +6,16 @@ A local video editor for macOS. Trim clips, combine videos in order, add text wa
 
 **[Download the app](https://github.com/GrahamQuan/video-quick-editor/releases)** · For Apple Silicon Macs (M-series chips)
 
+## Screenshots
+
+### Combine videos
+
+![Combine videos](docs/images/video_quick_editor_merge.png)
+
+### Automate video editing with AI Agent
+
+![Automate video editing with AI Agent](docs/images/video_quick_editor_agent.png)
+
 ## Install and get started
 
 1. Open **Assets** on a GitHub Release and download the file ending in `mac-arm64.dmg`. Versions marked **Pre-release** contain newer features and may be less stable.
