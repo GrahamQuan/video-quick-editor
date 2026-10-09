@@ -491,7 +491,12 @@ const exportQueue = new ExportQueue<{ request: ExportRequest; path: string; iden
     } else {
       const asset = assets.get(request.clips[0]!.assetId);
       if (!asset) throw new Error("ASSET_NOT_FOUND");
-      const name = timestampOutputName(asset.fileName, request.outputProfile, date);
+      const name = timestampOutputName(
+        asset.fileName,
+        request.outputProfile,
+        date,
+        request.clips.length,
+      );
       path = await allocateOutputPath(app.getPath("downloads"), name, reservedPaths);
     }
     const identity = await outputIdentity(path);

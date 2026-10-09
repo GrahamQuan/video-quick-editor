@@ -419,13 +419,15 @@ export function timestampOutputName(
   fileName: string,
   outputProfile = "source",
   date = new Date(),
+  clipCount = 1,
 ): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   const timestamp = `${String(date.getFullYear()).padStart(4, "0")}_${pad(date.getMonth() + 1)}_${pad(date.getDate())}--${pad(date.getHours())}_${pad(date.getMinutes())}_${pad(date.getSeconds())}`;
   const base = fileName.split(/[\\/]/).pop() ?? fileName;
   const dot = base.lastIndexOf(".");
   const extension = outputProfile === "mp4-compatible" ? ".mp4" : dot > 0 ? base.slice(dot) : "";
-  return `${timestamp}${extension}`;
+  const stem = clipCount > 1 ? "video_merged" : dot > 0 ? base.slice(0, dot) : base;
+  return `${stem}_${timestamp}${extension}`;
 }
 
 /** A path-only message is handled locally, before any model request. One path per line. */

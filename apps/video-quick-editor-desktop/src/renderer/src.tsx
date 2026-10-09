@@ -786,7 +786,14 @@ function EditorPage(): React.JSX.Element {
             onClick={() =>
               asset &&
               void window.videoQuickEditor
-                .chooseOutput(timestampOutputName(asset.fileName, store.outputProfile))
+                .chooseOutput(
+                  timestampOutputName(
+                    asset.fileName,
+                    store.outputProfile,
+                    new Date(),
+                    isCombine ? 2 : 1,
+                  ),
+                )
                 .then((output) => store.setOutput(output))
             }
           >

@@ -5,10 +5,10 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 
 export function defaultOutputName(
   firstFileName: string,
-  _clipCount: number,
+  clipCount: number,
   outputProfile: string = "source",
 ): string {
-  return timestampOutputName(firstFileName, outputProfile);
+  return timestampOutputName(firstFileName, outputProfile, new Date(), clipCount);
 }
 
 export async function allocateOutputPath(

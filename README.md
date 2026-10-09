@@ -33,11 +33,11 @@ Current packages are not notarized by Apple. If macOS says Apple cannot check th
 4. Optionally add a watermark, choose an output location, then submit the export.
 5. Open **Exports** to follow progress and open the finished video or reveal it in Finder.
 
-The default output is a broadly compatible **MP4**, saved to **Downloads**. Names look like `2026_09_07--22_30_45.mp4`; a suffix is added when needed to avoid overwriting an existing file.
+The default output is a broadly compatible **MP4**, saved to **Downloads**. Trimmed files use the original name without its extension followed by local time, such as `original_2026_09_07--22_30_45.mp4`; a suffix is added when needed to avoid overwriting an existing file.
 
 ## Combine videos
 
-Import multiple videos and open **Combine**. Confirm which clips to include, arrange their order, and set the range to keep from each one. Then submit the combined export.
+Import multiple videos and open **Combine**. Confirm which clips to include, arrange their order, and set the range to keep from each one. Then submit the combined export. Default combined filenames look like `video_merged_2026_09_07--22_30_45.mp4`.
 
 Different video sizes are scaled proportionally, with black padding when needed. You can keep editing after submitting an export: each submitted task retains its original settings, and tasks run one at a time.
 

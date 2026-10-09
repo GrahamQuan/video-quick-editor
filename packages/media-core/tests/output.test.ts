@@ -29,12 +29,14 @@ describe("输出保护", () => {
     ).toBe(join(directory, "中文_clip_3.mp4"));
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 8, 7, 9, 5, 3));
-    expect(defaultOutputName("中文.mp4", 2)).toBe("2026_09_07--09_05_03.mp4");
-    expect(defaultOutputName("中文.mov", 1, "mp4-compatible")).toBe("2026_09_07--09_05_03.mp4");
-    expect(defaultOutputName("中文.mov", 1)).toBe("2026_09_07--09_05_03.mov");
-    await writeFile(join(directory, "2026_09_07--09_05_03.mp4"), "existing");
+    expect(defaultOutputName("中文.mp4", 2)).toBe("video_merged_2026_09_07--09_05_03.mp4");
+    expect(defaultOutputName("中文.mov", 1, "mp4-compatible")).toBe(
+      "中文_2026_09_07--09_05_03.mp4",
+    );
+    expect(defaultOutputName("中文.mov", 1)).toBe("中文_2026_09_07--09_05_03.mov");
+    await writeFile(join(directory, "中文_2026_09_07--09_05_03.mp4"), "existing");
     expect(await allocateOutputPath(directory, defaultOutputName("中文.mp4", 1))).toBe(
-      join(directory, "2026_09_07--09_05_03_2.mp4"),
+      join(directory, "中文_2026_09_07--09_05_03_2.mp4"),
     );
   });
 
